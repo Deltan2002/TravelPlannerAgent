@@ -28,18 +28,6 @@ from app.tools import (
 from app.workflow import TravelWorkflow
 
 
-class PlanNotFoundError(LookupError):
-    pass
-
-
-class PlanStateConflictError(RuntimeError):
-    pass
-
-
-class WorkflowExecutionError(RuntimeError):
-    pass
-
-
 class TravelPlanService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -92,7 +80,7 @@ class TravelPlanService:
                 self.graph.invoke(initial, config=self._config(plan_id))
         except Exception as exc:
             self._mark_failed(plan_id, exc)
-            raise WorkflowExecutionError(str(exc)) from exc
+            raise RuntimeError(str(exc)) from exc
         return PlanAccepted(
             plan_id=plan_id,
             status=PlanStatus.AWAITING_REVIEW,
@@ -113,14 +101,14 @@ class TravelPlanService:
     def review_plan(self, plan_id: str, review: ReviewRequest) -> PlanResponse:
         current = self._get_values(plan_id)
         if current["status"] != PlanStatus.AWAITING_REVIEW.value:
-            raise PlanStateConflictError(
+            raise ValueError(
                 f"plan is '{current['status']}', not awaiting_review"
             )
         if (
             review.action != ReviewAction.APPROVE
             and current.get("revision_count", 0) >= self.settings.max_revisions
         ):
-            raise PlanStateConflictError(
+            raise ValueError(
                 f"maximum revision count ({self.settings.max_revisions}) reached; approve the plan"
             )
         try:
@@ -131,13 +119,13 @@ class TravelPlanService:
                 )
         except Exception as exc:
             self._mark_failed(plan_id, exc)
-            raise WorkflowExecutionError(str(exc)) from exc
+            raise RuntimeError(str(exc)) from exc
         return self.get_plan(plan_id)
 
     def get_final_plan(self, plan_id: str) -> FinalPlan:
         values = self._get_values(plan_id)
         if values["status"] != PlanStatus.FINALIZED.value or not values.get("final_plan"):
-            raise PlanStateConflictError("final plan is only available after approval")
+            raise ValueError("final plan is only available after approval")
         return FinalPlan.model_validate(values["final_plan"])
 
     def _get_values(self, plan_id: str) -> dict[str, Any]:
@@ -145,7 +133,7 @@ class TravelPlanService:
             snapshot = self.graph.get_state(self._config(plan_id))
         values = dict(snapshot.values) if snapshot and snapshot.values else {}
         if not values or values.get("plan_id") != plan_id:
-            raise PlanNotFoundError(f"plan '{plan_id}' was not found")
+            raise LookupError(f"plan '{plan_id}' was not found")
         return values
 
     def _mark_failed(self, plan_id: str, exc: Exception) -> None:

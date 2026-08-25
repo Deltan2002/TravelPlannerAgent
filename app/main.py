@@ -12,12 +12,7 @@ from app.models import (
     ReviewRequest,
     TravelRequest,
 )
-from app.service import (
-    PlanNotFoundError,
-    PlanStateConflictError,
-    TravelPlanService,
-    WorkflowExecutionError,
-)
+from app.service import TravelPlanService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -55,34 +50,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def create_plan(request: TravelRequest) -> PlanAccepted:
         try:
             return service().create_plan(request)
-        except WorkflowExecutionError as exc:
+        except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @api.get("/plan/{plan_id}", response_model=PlanResponse, tags=["plans"])
     def get_plan(plan_id: str) -> PlanResponse:
         try:
             return service().get_plan(plan_id)
-        except PlanNotFoundError as exc:
+        except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @api.post("/plan/{plan_id}/review", response_model=PlanResponse, tags=["plans"])
     def review_plan(plan_id: str, review: ReviewRequest) -> PlanResponse:
         try:
             return service().review_plan(plan_id, review)
-        except PlanNotFoundError as exc:
+        except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except PlanStateConflictError as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except WorkflowExecutionError as exc:
+        except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @api.get("/plan/{plan_id}/final", response_model=FinalPlan, tags=["plans"])
     def get_final_plan(plan_id: str) -> FinalPlan:
         try:
             return service().get_final_plan(plan_id)
-        except PlanNotFoundError as exc:
+        except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except PlanStateConflictError as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return api

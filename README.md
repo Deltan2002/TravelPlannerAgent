@@ -266,24 +266,74 @@ Mounting `data/` preserves SQLite checkpoints when the container is replaced.
 - **No booking side effects:** the system generates planning recommendations only. Activities,
   prices, safety advice, and operating details must be confirmed before purchase.
 
-## Production hardening with more time
+## Recommended Improvements
 
-1. Move checkpoints to PostgreSQL and add transactional plan metadata, tenant isolation, and
-   row-level authorization.
-2. Execute graphs in a durable queue with idempotency keys, retries with jitter, provider circuit
-   breakers, and dead-letter handling.
-3. Add OAuth/JWT authentication, per-plan ownership checks, secrets management, API rate limits,
-   request-size limits, and a complete audit trail.
-4. Add source freshness timestamps, citation-level claim grounding, prompt-injection filtering,
-   content moderation, and travel-advisory feeds from official authorities.
-5. Add OpenTelemetry traces/metrics, structured redacted logging, SLOs, cost/token budgets, and
-   provider latency dashboards.
-6. Add optimistic concurrency/version fields so two reviewers cannot resume the same checkpoint,
-   plus distributed locks for horizontally scaled workers.
-7. Add contract tests against provider sandboxes, LLM evaluation datasets, itinerary constraint
-   checks, load tests, and fault-injection tests.
-8. Encrypt sensitive trip data at rest, define retention/deletion policies, and minimize personal
-   data stored in checkpoints.
+### 1. Background processing
+
+Move research and itinerary generation to a background worker. `POST /plan` could return
+`202 Accepted` immediately, while `GET /plan/{id}` reports progress. BullMQ could be used with a
+separate Node.js worker, or a Python-native queue such as Celery, RQ, or ARQ could be used.
+
+### 2. Production database
+
+Replace local SQLite with PostgreSQL so multiple application instances can safely share workflow
+checkpoints and plan data.
+
+### 3. Authentication and ownership
+
+Add token-based authentication and associate every plan with a user. Users should only be able to
+read or modify plans that they own.
+
+### 4. External API reliability
+
+Add retries, exponential backoff, rate limiting, and fallback providers for web search, weather,
+and LLM calls.
+
+### 5. Prompt validation
+
+Detect and handle personally identifiable information, sanitize input before inserting it into a
+prompt or sending it to an LLM, defend against prompt-injection attempts, and add guardrails around
+tool selection and execution.
+
+### 6. Research quality and citations
+
+Prioritize official tourism and travel-advisory sources. Store source dates and attach citations to
+important claims such as safety guidance, prices, and opening hours.
+
+### 7. Additional travel tools
+
+Add flight estimates, hotel availability, live currency conversion, restaurant search, and more
+accurate transport-time calculations.
+
+### 8. User interface
+
+Build a small web interface for entering preferences, viewing the itinerary, changing a specific
+day, and approving or rejecting a plan without using Swagger UI.
+
+### 9. Monitoring and cost visibility
+
+Add structured logs, distributed tracing, performance metrics, alerts, provider-latency tracking,
+and LLM token-cost monitoring. Cache repeated queries when their results are safe to reuse.
+
+### 10. Safe concurrent review
+
+Add plan versions and concurrency checks so two reviewers cannot accidentally resume or overwrite
+the same workflow checkpoint.
+
+### 11. Automated testing
+
+Add validation and tool unit tests, endpoint tests, approve/reject/modify workflow tests,
+restart-persistence tests, provider contract tests, and load tests.
+
+### 12. Security and privacy
+
+Store credentials in a secrets manager, encrypt sensitive trip information, redact personal data
+from logs, and define retention and deletion policies.
+
+### 13. Itinerary quality evaluation
+
+Automatically verify that every date is covered, the plan stays within budget, travel times are
+realistic, activities do not overlap, and user preferences are respected.
 
 ## Assumptions
 

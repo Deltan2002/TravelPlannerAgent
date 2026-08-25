@@ -51,12 +51,18 @@ expose a final plan until the approval branch has completed.
 
 ### 1. Create a virtual environment
 
-Python 3.11 or 3.12 is supported.
+Python 3.11 through 3.13 is supported.
 
 ```bash
 cd ai-travel-planner
 python3.12 -m venv .venv
 source .venv/bin/activate
+python -m pip install -e .
+```
+
+Install the optional development dependency when you want to run Ruff:
+
+```bash
 python -m pip install -e '.[dev]'
 ```
 
@@ -170,6 +176,17 @@ curl -sS -X POST http://127.0.0.1:8000/plan/PLAN_ID/review \
   }'
 ```
 
+### Review rules
+
+- `approve` accepts optional feedback but must not include `modifications`.
+- `reject` requires feedback and must not include `modifications`.
+- `modify` requires a `modifications` object containing a hotel preference, day changes, or both.
+- A review is accepted only while the plan is `awaiting_review`. Approval finalizes and freezes the
+  plan; create a new plan if changes are needed afterward.
+
+Swagger UI may prefill optional fields with example values. Remove the entire `modifications`
+object before sending an approval or rejection.
+
 ### Retrieve the final plan
 
 ```bash
@@ -193,14 +210,14 @@ itinerary, budget, packing list, assumptions, plan ID, and finalization timestam
 
 | Variable | Default | Meaning |
 |---|---:|---|
-| `APP_MODE` | `demo` | `demo` uses labeled sample search/context; `live` calls providers |
+| `APP_MODE` | `demo` | `demo` uses labeled sample data; `live` calls Serper and Open-Meteo |
 | `DATABASE_PATH` | `data/travel_planner.sqlite3` | Durable LangGraph SQLite checkpoint file |
 | `SERPER_API_KEY` | empty | Serper credential |
 | `LLM_PROVIDER` | `deterministic` | `deterministic` or `openai` |
 | `OPENAI_API_KEY` | empty | OpenAI credential |
 | `OPENAI_MODEL` | `gpt-5-mini` | Responses API model name |
 | `HTTP_TIMEOUT_SECONDS` | `20` | Timeout for provider calls |
-| `MAX_REVISIONS` | `5` | Maximum non-approval review cycles |
+| `MAX_REVISIONS` | `5` | Maximum reject/modify cycles; approval remains available |
 
 `APP_MODE=live` fails clearly if the Serper key is unavailable. Open-Meteo forecasts
 are used only when the requested start date is inside its short forecast window; otherwise the

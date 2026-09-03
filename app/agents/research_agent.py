@@ -26,18 +26,27 @@ class ResearchAgent:
         )
         if feedback:
             prompt += f"\n\nReviewer feedback to address:\n{feedback}"
-        generated = self.llm.generate(
-            system_prompt=(
-                "You are a careful destination research agent. Produce the requested schema, "
-                "ground claims in the supplied results, keep source URLs unchanged, clearly "
-                "label uncertainty, and never claim bookings or prices are confirmed."
-            ),
-            user_prompt=prompt,
-            output_model=ResearchReport,
-            schema_name="destination_research",
-        )
+        try:
+            generated = self.llm.generate(
+                system_prompt=(
+                    "You are a careful destination research agent. Produce the requested schema, "
+                    "ground claims in the supplied results, keep source URLs unchanged, clearly "
+                    "label uncertainty, and never claim bookings or prices are confirmed."
+                ),
+                user_prompt=prompt,
+                output_model=ResearchReport,
+                schema_name="destination_research",
+            )
+        except ValueError:
+            generated = None
         if generated is not None:
-            return generated
+            return generated.model_copy(
+                update={
+                    "destination": request.destination,
+                    "weather": weather,
+                    "search_results": search_results,
+                }
+            )
         return self._deterministic_report(request, search_results, weather, feedback)
 
     @staticmethod
@@ -57,12 +66,19 @@ class ResearchAgent:
         ]
         if feedback:
             safety.append(f"Revision research was requested with this focus: {feedback[:240]}")
+        preference_context = (
+            f" Preferences to account for: {', '.join(request.preferences)}."
+            if request.preferences
+            else ""
+        )
         return ResearchReport(
             destination=destination,
             summary=(
-                f"A planning brief for {destination} focused on "
+                f"A planning brief for travel from {request.current_location} to {destination}, "
+                "focused on "
                 f"{', '.join(request.interests)}. Sources are discovery inputs; operating hours, "
                 "availability, advisories, and prices must be reconfirmed before booking."
+                f"{preference_context}"
             ),
             attractions=attractions,
             local_tips=[

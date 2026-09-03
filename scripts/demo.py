@@ -6,6 +6,7 @@ import httpx
 def main() -> None:
     start = date.today() + timedelta(days=60)
     request = {
+        "current_location": "Bengaluru, India",
         "destination": "Kyoto, Japan",
         "start_date": start.isoformat(),
         "end_date": (start + timedelta(days=2)).isoformat(),
@@ -15,7 +16,7 @@ def main() -> None:
         "interests": ["temples", "food", "photography"],
         "travelers": 2,
     }
-    with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as client:
+    with httpx.Client(base_url="http://127.0.0.1:8000", timeout=300) as client:
         created = client.post("/plan", json=request)
         created.raise_for_status()
         plan_id = created.json()["plan_id"]

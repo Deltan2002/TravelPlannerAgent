@@ -1,7 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Body, FastAPI, HTTPException, status
 
 from app.config import Settings, get_settings
 from app.models import (
@@ -13,6 +14,37 @@ from app.models import (
     TravelRequest,
 )
 from app.service import TravelPlanService
+
+REVIEW_EXAMPLES = {
+    "approve": {
+        "summary": "Approve the draft",
+        "value": {"action": "approve", "feedback": "Ready to finalize."},
+    },
+    "reject": {
+        "summary": "Reject and request a new draft",
+        "value": {
+            "action": "reject",
+            "feedback": "Add stronger late-evening transit safety research.",
+        },
+    },
+    "modify": {
+        "summary": "Modify selected plan details",
+        "value": {
+            "action": "modify",
+            "feedback": "Make day two slower.",
+            "modifications": {
+                "hotel_preference": "Prefer a quiet hotel near the station.",
+                "day_changes": [
+                    {
+                        "day": 2,
+                        "replace_activities_with": ["Tea ceremony", "Riverside walk"],
+                        "note": "Keep the afternoon low-key.",
+                    }
+                ],
+            },
+        },
+    },
+}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -61,7 +93,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @api.post("/plan/{plan_id}/review", response_model=PlanResponse, tags=["plans"])
-    def review_plan(plan_id: str, review: ReviewRequest) -> PlanResponse:
+    def review_plan(
+        plan_id: str,
+        review: Annotated[ReviewRequest, Body(openapi_examples=REVIEW_EXAMPLES)],
+    ) -> PlanResponse:
         try:
             return service().review_plan(plan_id, review)
         except LookupError as exc:

@@ -124,7 +124,7 @@ class TravelWorkflow:
         )
         if review.action == ReviewAction.REJECT:
             return Command(update=update, goto="research_agent")
-        return Command(update=update, goto="itinerary_planner_agent")
+        return Command(update=update, goto="itinerary_planner_agent") # for modifications
 
     @staticmethod
     def finalize(state: TravelState) -> TravelState:

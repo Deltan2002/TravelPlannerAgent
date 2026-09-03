@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -26,7 +26,18 @@ class ReviewAction(StrEnum):
 
 
 class TravelRequest(StrictModel):
-    destination: str = Field(min_length=2, max_length=120, examples=["Kyoto, Japan"])
+    current_location: str = Field(
+        min_length=2,
+        max_length=120,
+        description="Departure city/region and country; do not provide a street address.",
+        examples=["Bengaluru, India"],
+    )
+    destination: str = Field(
+        min_length=2,
+        max_length=120,
+        description="Destination city/region and country.",
+        examples=["Kyoto, Japan"],
+    )
     start_date: date
     end_date: date
     budget_min: float = Field(ge=0, examples=[1800])
@@ -47,11 +58,19 @@ class TravelRequest(StrictModel):
         normalized = [value.strip() for value in self.interests if value.strip()]
         if not normalized:
             raise ValueError("at least one non-empty interest is required")
+        if any(len(value) > 100 for value in normalized):
+            raise ValueError("each interest must contain at most 100 characters")
         self.interests = list(dict.fromkeys(normalized))
-        self.preferences = list(
-            dict.fromkeys(value.strip() for value in self.preferences if value.strip())
-        )
+        preferences = [value.strip() for value in self.preferences if value.strip()]
+        if any(len(value) > 200 for value in preferences):
+            raise ValueError("each preference must contain at most 200 characters")
+        self.preferences = list(dict.fromkeys(preferences))
+        self.current_location = self.current_location.strip()
         self.destination = self.destination.strip()
+        if len(self.current_location) < 2:
+            raise ValueError("current_location must contain at least 2 characters")
+        if len(self.destination) < 2:
+            raise ValueError("destination must contain at least 2 characters")
         return self
 
     @property
@@ -64,6 +83,17 @@ class DayModification(StrictModel):
     replace_activities_with: list[str] = Field(default_factory=list, max_length=8)
     note: str | None = Field(default=None, max_length=500)
 
+    @model_validator(mode="after")
+    def normalize_change(self) -> "DayModification":
+        activities = [value.strip() for value in self.replace_activities_with if value.strip()]
+        if any(len(value) > 200 for value in activities):
+            raise ValueError("each replacement activity must contain at most 200 characters")
+        self.replace_activities_with = list(dict.fromkeys(activities))
+        self.note = self.note.strip() if self.note and self.note.strip() else None
+        if not self.replace_activities_with and self.note is None:
+            raise ValueError("a day change requires replacement activities, a note, or both")
+        return self
+
 
 class PlanModification(StrictModel):
     hotel_preference: str | None = Field(default=None, max_length=300)
@@ -71,8 +101,15 @@ class PlanModification(StrictModel):
 
     @model_validator(mode="after")
     def require_change(self) -> "PlanModification":
-        values = self.model_dump(exclude_none=True)
-        if not any(value for value in values.values()):
+        self.hotel_preference = (
+            self.hotel_preference.strip()
+            if self.hotel_preference and self.hotel_preference.strip()
+            else None
+        )
+        days = [change.day for change in self.day_changes]
+        if len(days) != len(set(days)):
+            raise ValueError("only one modification is allowed for each day")
+        if self.hotel_preference is None and not self.day_changes:
             raise ValueError("at least one modification must be supplied")
         return self
 
@@ -84,13 +121,13 @@ class ReviewRequest(StrictModel):
 
     @model_validator(mode="after")
     def validate_action_payload(self) -> "ReviewRequest":
-        if self.action == ReviewAction.REJECT and not (self.feedback and self.feedback.strip()):
+        self.feedback = self.feedback.strip() if self.feedback and self.feedback.strip() else None
+        if self.action == ReviewAction.REJECT and self.feedback is None:
             raise ValueError("feedback is required when rejecting a plan")
         if self.action == ReviewAction.MODIFY and self.modifications is None:
             raise ValueError("modifications are required when action is modify")
-        if self.action == ReviewAction.APPROVE and self.modifications is not None:
-            raise ValueError("modifications are not accepted when approving a plan")
-        self.feedback = self.feedback.strip() if self.feedback else None
+        if self.action != ReviewAction.MODIFY and self.modifications is not None:
+            raise ValueError(f"modifications are not accepted when action is {self.action.value}")
         return self
 
 
@@ -121,10 +158,10 @@ class ResearchReport(StrictModel):
 
 
 class Activity(StrictModel):
-    time: str
-    title: str
-    description: str
-    category: str
+    time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=1000)
+    category: str = Field(min_length=1, max_length=100)
     estimated_cost: float = Field(ge=0)
     source_url: HttpUrl | None = None
 
@@ -136,6 +173,16 @@ class ItineraryDay(StrictModel):
     activities: list[Activity] = Field(min_length=1)
     daily_notes: list[str] = Field(default_factory=list)
     estimated_total: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> "ItineraryDay":
+        times = [activity.time for activity in self.activities]
+        if len(times) != len(set(times)):
+            raise ValueError("activities within a day cannot have duplicate times")
+        expected_total = round(sum(item.estimated_cost for item in self.activities), 2)
+        if abs(self.estimated_total - expected_total) > 0.01:
+            raise ValueError("estimated_total must equal the sum of activity costs")
+        return self
 
 
 class BudgetBreakdown(StrictModel):
@@ -150,16 +197,30 @@ class BudgetBreakdown(StrictModel):
 
 
 class DraftPlan(StrictModel):
-    title: str
-    destination: str
+    title: str = Field(min_length=1, max_length=200)
+    current_location: str = Field(min_length=2, max_length=120)
+    destination: str = Field(min_length=2, max_length=120)
     start_date: date
     end_date: date
-    travelers: int
+    travelers: int = Field(ge=1, le=20)
     lodging_notes: list[str]
-    days: list[ItineraryDay]
+    days: list[ItineraryDay] = Field(min_length=1, max_length=21)
     budget: BudgetBreakdown
     packing_list: list[str]
     assumptions: list[str]
+
+    @model_validator(mode="after")
+    def validate_trip_coverage(self) -> "DraftPlan":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        expected_days = (self.end_date - self.start_date).days + 1
+        if len(self.days) != expected_days:
+            raise ValueError("itinerary must contain exactly one entry for every trip date")
+        for index, itinerary_day in enumerate(self.days, start=1):
+            expected_date = self.start_date + timedelta(days=index - 1)
+            if itinerary_day.day != index or itinerary_day.date != expected_date:
+                raise ValueError("itinerary days must be sequential and match the trip dates")
+        return self
 
 
 class ReviewRecord(StrictModel):

@@ -31,7 +31,8 @@ class WebSearchTool:
         interests = ", ".join(request.interests)
         return (
             f"{request.destination} travel guide attractions local tips safety weather "
-            f"{request.start_date.isoformat()} {interests}"
+            f"{request.start_date.isoformat()} {interests} "
+            f"traveling from {request.current_location}"
         )
 
     def _search_serper(self, query: str, limit: int) -> list[SearchResult]:
@@ -65,7 +66,8 @@ class WebSearchTool:
                 "url": f"https://en.wikipedia.org/wiki/Special:Search?search={encoded}",
                 "snippet": (
                     f"Sample research overview covering major districts, signature sights, and "
-                    f"visitor logistics in {destination}. Verify details before booking."
+                    f"visitor logistics in {destination} for a traveler starting in "
+                    f"{request.current_location}. Verify details before booking."
                 ),
             },
             {

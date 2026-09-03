@@ -44,7 +44,8 @@ expose a final plan until the approval branch has completed.
 - Optional OpenAI schema-constrained generation
 - Credential-free, deterministic demo mode for local evaluation
 - Approve, reject-with-feedback, and targeted modification paths
-- Strict Pydantic validation, meaningful 404/409/422/502 responses, and revision limits
+- Strict input and generated-plan validation, meaningful 404/409/422/502 responses, and revision
+  limits
 - Docker support and an executable API demo script
 
 ## Quick start
@@ -110,6 +111,7 @@ Open:
 curl -sS -X POST http://127.0.0.1:8000/plan \
   -H 'Content-Type: application/json' \
   -d '{
+    "current_location": "Bengaluru, India",
     "destination": "Kyoto, Japan",
     "start_date": "2026-11-10",
     "end_date": "2026-11-12",
@@ -158,6 +160,7 @@ curl -sS -X POST http://127.0.0.1:8000/plan/PLAN_ID/review \
 ### Modify selected plan details
 
 Modification routes directly back to the itinerary agent and supports hotel and per-day changes.
+Each referenced day must exist in the trip, and duplicate or blank changes are rejected.
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/plan/PLAN_ID/review \
@@ -184,8 +187,8 @@ curl -sS -X POST http://127.0.0.1:8000/plan/PLAN_ID/review \
 - A review is accepted only while the plan is `awaiting_review`. Approval finalizes and freezes the
   plan; create a new plan if changes are needed afterward.
 
-Swagger UI may prefill optional fields with example values. Remove the entire `modifications`
-object before sending an approval or rejection.
+Swagger UI provides separate `approve`, `reject`, and `modify` examples. Choose the matching
+example before submitting the review request.
 
 ### Retrieve the final plan
 
@@ -216,7 +219,8 @@ itinerary, budget, packing list, assumptions, plan ID, and finalization timestam
 | `LLM_PROVIDER` | `deterministic` | `deterministic` or `openai` |
 | `OPENAI_API_KEY` | empty | OpenAI credential |
 | `OPENAI_MODEL` | `gpt-5-mini` | Responses API model name |
-| `HTTP_TIMEOUT_SECONDS` | `20` | Timeout for provider calls |
+| `OPENAI_TIMEOUT_SECONDS` | `120` | Read timeout for OpenAI generation |
+| `HTTP_TIMEOUT_SECONDS` | `20` | Timeout for search, weather, and connections |
 | `MAX_REVISIONS` | `5` | Maximum reject/modify cycles; approval remains available |
 
 `APP_MODE=live` fails clearly if the Serper key is unavailable. Open-Meteo forecasts
@@ -258,8 +262,9 @@ Mounting `data/` preserves SQLite checkpoints when the container is replaced.
   return `202 Accepted` and run the graph through a worker queue.
 - **SQLite checkpointer:** ideal for local evaluation and proves durable HITL semantics. A
   multi-instance deployment should use PostgreSQL or another supported network checkpointer.
-- **Deterministic fallback:** reviewers can exercise every path without keys or API charges. All
-  demo sources and estimates are labeled; live claims are not silently fabricated.
+- **Deterministic fallback:** reviewers can exercise every path without keys or API charges. It is
+  also used when LLM output fails date, budget, or structural consistency checks. All demo sources
+  and estimates are labeled; live claims are not silently fabricated.
 - **Small modification contract:** hotel and per-day edits are auditable and easy to validate.
 - **Research on reject, planning on modify:** rejection can invalidate evidence, so it repeats both
   agents. A targeted modification normally preserves research and only reruns planning.
@@ -317,8 +322,8 @@ and LLM token-cost monitoring. Cache repeated queries when their results are saf
 
 ### 10. Safe concurrent review
 
-Add plan versions and concurrency checks so two reviewers cannot accidentally resume or overwrite
-the same workflow checkpoint.
+Add database-backed plan versions and concurrency checks across multiple application instances so
+two reviewers cannot accidentally resume or overwrite the same workflow checkpoint.
 
 ### 11. Automated testing
 
@@ -332,14 +337,16 @@ from logs, and define retention and deletion policies.
 
 ### 13. Itinerary quality evaluation
 
-Automatically verify that every date is covered, the plan stays within budget, travel times are
-realistic, activities do not overlap, and user preferences are respected.
+Extend the current date, activity-budget, and source checks to verify realistic travel times,
+activity duration and overlap, opening hours, and deeper preference satisfaction.
 
 ## Assumptions
 
 - A trip is between 1 and 21 calendar days and has 1-20 travelers.
+- `current_location` is the traveler origin used for research and planning context; provide a
+  city/region and country rather than a street address.
 - The supplied budget covers lodging, food, activities, local transport, and contingency; travel
-  to the destination is excluded unless a later tool explicitly adds it.
+  from the current location to the destination is excluded unless a later tool explicitly adds it.
 - Currency conversion and booking are outside scope.
 - Search results are research inputs rather than guarantees; the plan carries verification notes.
 - One reviewer acts on a plan at a time in this local implementation.

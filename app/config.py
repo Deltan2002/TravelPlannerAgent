@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     llm_provider: Literal["deterministic", "openai"] = "deterministic"
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
+    openai_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
 
     http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     max_revisions: int = Field(default=5, ge=1, le=20)

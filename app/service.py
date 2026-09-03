@@ -99,27 +99,38 @@ class TravelPlanService:
         return PlanResponse.model_validate(public_values)
 
     def review_plan(self, plan_id: str, review: ReviewRequest) -> PlanResponse:
-        current = self._get_values(plan_id)
-        if current["status"] != PlanStatus.AWAITING_REVIEW.value:
-            raise ValueError(
-                f"plan is '{current['status']}', not awaiting_review"
-            )
-        if (
-            review.action != ReviewAction.APPROVE
-            and current.get("revision_count", 0) >= self.settings.max_revisions
-        ):
-            raise ValueError(
-                f"maximum revision count ({self.settings.max_revisions}) reached; approve the plan"
-            )
-        try:
-            with self._lock:
+        with self._lock:
+            current = self._get_values(plan_id)
+            if current["status"] != PlanStatus.AWAITING_REVIEW.value:
+                raise ValueError(f"plan is '{current['status']}', not awaiting_review")
+            if (
+                review.action != ReviewAction.APPROVE
+                and current.get("revision_count", 0) >= self.settings.max_revisions
+            ):
+                raise ValueError(
+                    f"maximum revision count ({self.settings.max_revisions}) reached; "
+                    "approve the plan"
+                )
+            if review.modifications:
+                request = TravelRequest.model_validate(current["request"])
+                invalid_days = sorted(
+                    change.day
+                    for change in review.modifications.day_changes
+                    if change.day > request.days
+                )
+                if invalid_days:
+                    invalid = ", ".join(str(day) for day in invalid_days)
+                    raise ValueError(
+                        f"modification day(s) {invalid} outside trip range 1-{request.days}"
+                    )
+            try:
                 self.graph.invoke(
                     Command(resume=review.model_dump(mode="json")),
                     config=self._config(plan_id),
                 )
-        except Exception as exc:
-            self._mark_failed(plan_id, exc)
-            raise RuntimeError(str(exc)) from exc
+            except Exception as exc:
+                self._mark_failed(plan_id, exc)
+                raise RuntimeError(str(exc)) from exc
         return self.get_plan(plan_id)
 
     def get_final_plan(self, plan_id: str) -> FinalPlan:

@@ -49,8 +49,8 @@ class TravelRequest(StrictModel):
     origin_transport_budget: float = Field(
         ge=0,
         description=(
-            "Estimated round-trip transport cost from current_location to destination for all "
-            "travelers."
+            "Maximum round-trip transport allocation from current_location to destination for "
+            "all travelers."
         ),
         examples=[600],
     )
@@ -155,6 +155,25 @@ class SearchResult(StrictModel):
     source: str
 
 
+class TransportOption(StrictModel):
+    mode: Literal["flight", "train", "bus", "ferry", "car"]
+    source_title: str = Field(min_length=1, max_length=200)
+    route: str = Field(min_length=3, max_length=300)
+    estimated_cost_per_person: float = Field(gt=0)
+    estimated_total_cost: float = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    travelers: int = Field(ge=1, le=20)
+    source_url: HttpUrl
+    price_evidence: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "TransportOption":
+        expected = round(self.estimated_cost_per_person * self.travelers, 2)
+        if abs(self.estimated_total_cost - expected) > 0.01:
+            raise ValueError("estimated_total_cost must equal per-person cost times travelers")
+        return self
+
+
 class WeatherSummary(StrictModel):
     source: str
     summary: str
@@ -170,6 +189,9 @@ class ResearchReport(StrictModel):
     local_tips: list[str]
     safety_notes: list[str]
     season_notes: list[str]
+    transport_summary: str = "No transport options were recorded for this plan."
+    transport_options: list[TransportOption] = Field(default_factory=list)
+    transport_search_results: list[SearchResult] = Field(default_factory=list)
     weather: WeatherSummary
     search_results: list[SearchResult]
 
@@ -221,6 +243,8 @@ class DraftPlan(StrictModel):
     start_date: date
     end_date: date
     travelers: int = Field(ge=1, le=20)
+    transport_summary: str = "No transport options were recorded for this plan."
+    transport_options: list[TransportOption] = Field(default_factory=list)
     lodging_notes: list[str]
     days: list[ItineraryDay] = Field(min_length=1, max_length=21)
     budget: BudgetBreakdown

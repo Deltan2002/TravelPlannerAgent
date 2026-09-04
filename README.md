@@ -18,8 +18,10 @@ flowchart LR
     GRAPH --> VALIDATE[Validate request]
     VALIDATE --> RESEARCH[Research Agent]
     RESEARCH --> WS[Serper]
+    RESEARCH --> TRANSPORT[Serper transport search]
     RESEARCH --> WEATHER[Open-Meteo / seasonal context]
     WS -. cached responses .-> REDIS[(Redis)]
+    TRANSPORT -. cached responses .-> REDIS
     WEATHER -. cached responses .-> REDIS
     RESEARCH --> PLANNER[Itinerary Planner Agent]
     PLANNER -. cached LLM responses .-> REDIS
@@ -43,6 +45,7 @@ expose a final plan until the approval branch has completed.
 - SQLite-backed checkpoint persistence across process restarts
 - Separate research and itinerary agents with two tools each
 - Serper search with normalized source records
+- Budget-filtered round-trip transport options sorted by estimated total cost
 - Open-Meteo geocoding and forecast context without an API key
 - Optional OpenAI schema-constrained generation
 - Redis caching for successful Serper, Open-Meteo, and identical OpenAI requests
@@ -140,10 +143,16 @@ curl -sS -X POST http://127.0.0.1:8000/plan \
 The call executes research and planning synchronously, stops at the durable review interrupt, and
 returns HTTP `201` with a `plan_id`, status URL, and review URL.
 
-`origin_transport_budget` is the user-provided estimated round-trip cost from the current location
-to the destination for all travelers. It is included in the total budget and deducted before the
-remaining amount is allocated across lodging (35%), food (20%), activities (25%), local transport
-(15%), and contingency (5%).
+`origin_transport_budget` is the maximum amount reserved for round-trip travel from the current
+location to the destination for all travelers. It is included in the total budget and deducted
+before the remaining amount is allocated across lodging (35%), food (20%), activities (25%), local
+transport (15%), and contingency (5%).
+
+In live mode, the research tool searches for flights, trains, buses, ferries, and car travel. A
+result becomes a transport option only when it matches the requested route, mentions a round trip,
+identifies the fare as per-person, and contains an explicit price in the requested currency. The
+fare is multiplied by the number of travelers, filtered against `origin_transport_budget`, and
+sorted by total cost. If no sourced result qualifies, `transport_options` is an empty list.
 
 ### Inspect the draft and workflow status
 
@@ -151,8 +160,9 @@ remaining amount is allocated across lodging (35%), food (20%), activities (25%)
 curl -sS http://127.0.0.1:8000/plan/PLAN_ID
 ```
 
-The response includes the validated request, research report, draft itinerary, review history,
-revision count, and `awaiting_input`. Before approval, the status is `awaiting_review`.
+The response includes the validated request, research report, sorted transport options, draft
+itinerary, review history, revision count, and `awaiting_input`. Before approval, the status is
+`awaiting_review`.
 
 ### Approve
 
@@ -215,8 +225,8 @@ curl -sS http://127.0.0.1:8000/plan/PLAN_ID/final
 ```
 
 This endpoint returns HTTP `409` until the plan is approved. After approval it returns the frozen
-itinerary, budget including origin transport, packing list, assumptions, plan ID, and finalization
-timestamp.
+itinerary, sorted transport options, budget including the origin allocation, packing list,
+assumptions, plan ID, and finalization timestamp.
 
 ## Endpoints
 
@@ -292,6 +302,9 @@ checkpoints, and the `redis-data` volume preserves cached entries until their TT
 - **Redis TTL cache:** exact successful provider responses are shared across app processes to
   reduce latency, rate-limit usage, and LLM cost. Cache access fails open, and hashed keys avoid
   placing raw queries or prompts in Redis key names.
+- **Conservative transport matching:** the service only returns search results with an explicit
+  same-currency round-trip fare. Results are estimates rather than live inventory, and an empty
+  list is preferred over inventing an option.
 - **Small modification contract:** hotel and per-day edits are auditable and easy to validate.
 - **Research on reject, planning on modify:** rejection can invalidate evidence, so it repeats both
   agents. A targeted modification normally preserves research and only reruns planning.
@@ -334,8 +347,9 @@ important claims such as safety guidance, prices, and opening hours.
 
 ### 7. Additional travel tools
 
-Add flight estimates, hotel availability, live currency conversion, restaurant search, and more
-accurate transport-time calculations.
+Replace search-snippet transport estimates with live flight, rail, bus, and ferry availability
+APIs. Add hotel availability, live currency conversion, restaurant search, and accurate transport
+times.
 
 ### 8. User interface
 
@@ -372,9 +386,10 @@ activity duration and overlap, opening hours, and deeper preference satisfaction
 - A trip is between 1 and 21 calendar days and has 1-20 travelers.
 - `current_location` is the traveler origin used for research and planning context; provide a
   city/region and country rather than a street address.
-- The supplied budget includes the user-provided origin transport estimate plus lodging, food,
-  activities, local transport, and contingency at the destination.
-- Origin transport is a planning estimate supplied by the user, not a live fare or confirmed quote.
+- The supplied budget includes a user-provided maximum origin transport allocation plus lodging,
+  food, activities, local transport, and contingency at the destination.
+- Transport search fares are treated as per-person round-trip estimates and multiplied by the
+  traveler count. They are not live inventory or confirmed quotes.
 - Currency conversion and booking are outside scope.
 - Search results are research inputs rather than guarantees; the plan carries verification notes.
 - One reviewer acts on a plan at a time in this local implementation.

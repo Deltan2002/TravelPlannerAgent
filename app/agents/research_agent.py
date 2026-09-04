@@ -1,5 +1,5 @@
 from app.llm import StructuredLLM
-from app.models import ResearchReport, TravelRequest
+from app.models import ResearchReport, TransportOption, TravelRequest
 from app.prompts import RESEARCH_SYSTEM_PROMPT, build_research_prompt
 from app.tools.destination_context import DestinationContextTool
 from app.tools.web_search import WebSearchTool
@@ -18,11 +18,14 @@ class ResearchAgent:
 
     def run(self, request: TravelRequest, feedback: str | None = None) -> ResearchReport:
         search_results = self.web_search.search(request)
+        transport_search_results, transport_options = self.web_search.search_transport(request)
         weather = self.destination_context.get_weather(request)
         prompt = build_research_prompt(
             request,
             weather,
             search_results,
+            transport_search_results,
+            transport_options,
             feedback,
         )
         try:
@@ -38,14 +41,31 @@ class ResearchAgent:
             return generated.model_copy(
                 update={
                     "destination": request.destination,
+                    "transport_summary": self._transport_summary(request, transport_options),
+                    "transport_options": transport_options,
+                    "transport_search_results": transport_search_results,
                     "weather": weather,
                     "search_results": search_results,
                 }
             )
-        return self._deterministic_report(request, search_results, weather, feedback)
+        return self._deterministic_report(
+            request,
+            search_results,
+            transport_search_results,
+            transport_options,
+            weather,
+            feedback,
+        )
 
     @staticmethod
-    def _deterministic_report(request, search_results, weather, feedback) -> ResearchReport:
+    def _deterministic_report(
+        request,
+        search_results,
+        transport_search_results,
+        transport_options,
+        weather,
+        feedback,
+    ) -> ResearchReport:
         destination = request.destination
         attractions = [
             f"A landmark-focused orientation walk in {destination}",
@@ -83,6 +103,26 @@ class ResearchAgent:
             ],
             safety_notes=safety,
             season_notes=[weather.summary],
+            transport_summary=ResearchAgent._transport_summary(request, transport_options),
+            transport_options=transport_options,
+            transport_search_results=transport_search_results,
             weather=weather,
             search_results=search_results,
+        )
+
+    @staticmethod
+    def _transport_summary(
+        request: TravelRequest, options: list[TransportOption]
+    ) -> str:
+        if not options:
+            return (
+                f"No sourced round-trip transport option was found at or below "
+                f"{request.origin_transport_budget:.2f} {request.currency} for all travelers."
+            )
+        cheapest = options[0]
+        return (
+            f"Found {len(options)} sourced option(s) within the "
+            f"{request.origin_transport_budget:.2f} {request.currency} allocation. "
+            f"The lowest estimated total is {cheapest.estimated_total_cost:.2f} "
+            f"{cheapest.currency} by {cheapest.mode}."
         )

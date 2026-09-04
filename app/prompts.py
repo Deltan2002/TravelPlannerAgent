@@ -3,6 +3,7 @@ from app.models import (
     PlanModification,
     ResearchReport,
     SearchResult,
+    TransportOption,
     TravelRequest,
     WeatherSummary,
 )
@@ -10,7 +11,8 @@ from app.models import (
 RESEARCH_SYSTEM_PROMPT = (
     "You are a careful destination research agent. Produce the requested schema, "
     "ground claims in the supplied results, keep source URLs unchanged, clearly "
-    "label uncertainty, and never claim bookings or prices are confirmed."
+    "label uncertainty, and never claim bookings or prices are confirmed. Preserve "
+    "the supplied transport search results and budget-filtered transport options."
 )
 
 ITINERARY_SYSTEM_PROMPT = (
@@ -25,6 +27,8 @@ def build_research_prompt(
     request: TravelRequest,
     weather: WeatherSummary,
     search_results: list[SearchResult],
+    transport_search_results: list[SearchResult],
+    transport_options: list[TransportOption],
     feedback: str | None,
 ) -> str:
     prompt = (
@@ -32,6 +36,10 @@ def build_research_prompt(
         f"Weather context:\n{weather.model_dump_json(indent=2)}\n\n"
         "Web results:\n"
         + "\n".join(item.model_dump_json() for item in search_results)
+        + "\n\nTransport search results:\n"
+        + "\n".join(item.model_dump_json() for item in transport_search_results)
+        + "\n\nBudget-filtered transport options, already sorted cheapest first:\n"
+        + "\n".join(item.model_dump_json() for item in transport_options)
     )
     if feedback:
         prompt += f"\n\nReviewer feedback to address:\n{feedback}"

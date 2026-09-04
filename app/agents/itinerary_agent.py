@@ -84,6 +84,10 @@ class ItineraryPlannerAgent:
                 "start_date": request.start_date,
                 "end_date": request.end_date,
                 "travelers": request.travelers,
+                "transport_summary": research.transport_summary,
+                "transport_options": [
+                    option.model_dump() for option in research.transport_options
+                ],
                 "budget": budget.model_dump(),
                 "packing_list": packing,
             }
@@ -166,9 +170,10 @@ class ItineraryPlannerAgent:
                 )
             )
         assumptions = [
-            f"The budget includes {request.origin_transport_budget:.2f} {request.currency} as a "
-            f"user-provided estimate for round-trip travel from {request.current_location} to "
-            f"{request.destination} for all travelers.",
+            f"The budget reserves up to {request.origin_transport_budget:.2f} {request.currency} "
+            f"for round-trip travel from {request.current_location} to {request.destination} "
+            f"for all travelers.",
+            "Transport prices are search-derived estimates and must be verified before booking.",
             "Costs are planning estimates, not quotes or confirmed reservations.",
             "Travel times and opening hours must be verified against final venues and dates.",
         ]
@@ -183,6 +188,8 @@ class ItineraryPlannerAgent:
             start_date=request.start_date,
             end_date=request.end_date,
             travelers=request.travelers,
+            transport_summary=research.transport_summary,
+            transport_options=research.transport_options,
             lodging_notes=[
                 "Choose a well-connected area that reduces daily transit.",
                 "Confirm cancellation terms, taxes, room occupancy, and accessibility directly.",

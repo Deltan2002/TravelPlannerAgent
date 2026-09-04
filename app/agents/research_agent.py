@@ -1,5 +1,6 @@
 from app.llm import StructuredLLM
 from app.models import ResearchReport, TravelRequest
+from app.prompts import RESEARCH_SYSTEM_PROMPT, build_research_prompt
 from app.tools.destination_context import DestinationContextTool
 from app.tools.web_search import WebSearchTool
 
@@ -18,21 +19,15 @@ class ResearchAgent:
     def run(self, request: TravelRequest, feedback: str | None = None) -> ResearchReport:
         search_results = self.web_search.search(request)
         weather = self.destination_context.get_weather(request)
-        prompt = (
-            f"Travel request:\n{request.model_dump_json(indent=2)}\n\n"
-            f"Weather context:\n{weather.model_dump_json(indent=2)}\n\n"
-            "Web results:\n"
-            + "\n".join(item.model_dump_json() for item in search_results)
+        prompt = build_research_prompt(
+            request,
+            weather,
+            search_results,
+            feedback,
         )
-        if feedback:
-            prompt += f"\n\nReviewer feedback to address:\n{feedback}"
         try:
             generated = self.llm.generate(
-                system_prompt=(
-                    "You are a careful destination research agent. Produce the requested schema, "
-                    "ground claims in the supplied results, keep source URLs unchanged, clearly "
-                    "label uncertainty, and never claim bookings or prices are confirmed."
-                ),
+                system_prompt=RESEARCH_SYSTEM_PROMPT,
                 user_prompt=prompt,
                 output_model=ResearchReport,
                 schema_name="destination_research",

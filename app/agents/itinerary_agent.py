@@ -9,6 +9,7 @@ from app.models import (
     ResearchReport,
     TravelRequest,
 )
+from app.prompts import ITINERARY_SYSTEM_PROMPT, build_itinerary_prompt
 from app.tools.planning import BudgetAllocatorTool, PackingListTool
 
 
@@ -36,25 +37,17 @@ class ItineraryPlannerAgent:
         )
         budget = self.budget_allocator.allocate(request)
         packing = self.packing_list.generate(request, research.weather)
-        prompt = (
-            f"Travel request:\n{request.model_dump_json(indent=2)}\n\n"
-            f"Research report:\n{research.model_dump_json(indent=2)}\n\n"
-            f"Budget tool output:\n{budget.model_dump_json(indent=2)}\n\n"
-            f"Packing tool output:\n{packing}"
+        prompt = build_itinerary_prompt(
+            request,
+            research,
+            budget,
+            packing,
+            feedback,
+            parsed_modifications,
         )
-        if feedback:
-            prompt += f"\n\nReviewer feedback:\n{feedback}"
-        if parsed_modifications:
-            modifications_json = parsed_modifications.model_dump_json(indent=2)
-            prompt += f"\n\nRequired modifications:\n{modifications_json}"
         try:
             generated = self.llm.generate(
-                system_prompt=(
-                    "You are an itinerary planner. Return a feasible day-by-day plan matching "
-                    "every date exactly once, respect the budget, use realistic travel buffers, "
-                    "and do not claim reservations were made. Preserve the supplied current "
-                    "location and destination exactly in the output."
-                ),
+                system_prompt=ITINERARY_SYSTEM_PROMPT,
                 user_prompt=prompt,
                 output_model=DraftPlan,
                 schema_name="travel_itinerary",

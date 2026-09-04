@@ -40,8 +40,20 @@ class TravelRequest(StrictModel):
     )
     start_date: date
     end_date: date
-    budget_min: float = Field(ge=0, examples=[1800])
-    budget_max: float = Field(gt=0, examples=[2600])
+    budget_min: float = Field(
+        ge=0, description="Minimum total trip budget, including origin transport.", examples=[1800]
+    )
+    budget_max: float = Field(
+        gt=0, description="Maximum total trip budget, including origin transport.", examples=[2600]
+    )
+    origin_transport_budget: float = Field(
+        ge=0,
+        description=(
+            "Estimated round-trip transport cost from current_location to destination for all "
+            "travelers."
+        ),
+        examples=[600],
+    )
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
     interests: list[str] = Field(min_length=1, max_length=12)
     travelers: int = Field(default=1, ge=1, le=20)
@@ -55,6 +67,11 @@ class TravelRequest(StrictModel):
             raise ValueError("trip duration cannot exceed 21 days")
         if self.budget_min > self.budget_max:
             raise ValueError("budget_min cannot exceed budget_max")
+        planning_total = round((self.budget_min + self.budget_max) / 2, 2)
+        if self.origin_transport_budget >= planning_total:
+            raise ValueError(
+                "origin_transport_budget must be below the midpoint of the budget range"
+            )
         normalized = [value.strip() for value in self.interests if value.strip()]
         if not normalized:
             raise ValueError("at least one non-empty interest is required")
@@ -187,6 +204,7 @@ class ItineraryDay(StrictModel):
 
 class BudgetBreakdown(StrictModel):
     total_budget: float = Field(gt=0)
+    origin_transport: float = Field(ge=0)
     lodging: float = Field(ge=0)
     food: float = Field(ge=0)
     activities: float = Field(ge=0)

@@ -19,7 +19,10 @@ flowchart LR
     VALIDATE --> RESEARCH[Research Agent]
     RESEARCH --> WS[Serper]
     RESEARCH --> WEATHER[Open-Meteo / seasonal context]
+    WS -. cached responses .-> REDIS[(Redis)]
+    WEATHER -. cached responses .-> REDIS
     RESEARCH --> PLANNER[Itinerary Planner Agent]
+    PLANNER -. cached LLM responses .-> REDIS
     PLANNER --> BUDGET[Budget Allocator]
     PLANNER --> PACKING[Packing List Tool]
     PLANNER --> REVIEW{{Durable HITL interrupt}}
@@ -42,6 +45,7 @@ expose a final plan until the approval branch has completed.
 - Serper search with normalized source records
 - Open-Meteo geocoding and forecast context without an API key
 - Optional OpenAI schema-constrained generation
+- Redis caching for successful Serper, Open-Meteo, and identical OpenAI requests
 - Credential-free, deterministic demo mode for local evaluation
 - Approve, reject-with-feedback, and targeted modification paths
 - Strict input and generated-plan validation, meaningful 404/409/422/502 responses, and revision
@@ -74,6 +78,14 @@ Demo mode needs no secrets:
 ```bash
 cp .env.example .env
 ```
+
+The example enables Redis caching. Start Redis with Docker before running the API:
+
+```bash
+docker compose up -d redis
+```
+
+If Redis is not available, clear `REDIS_URL`; provider calls will continue without caching.
 
 To use current web research, set `APP_MODE=live` and configure Serper:
 
@@ -117,6 +129,7 @@ curl -sS -X POST http://127.0.0.1:8000/plan \
     "end_date": "2026-11-12",
     "budget_min": 1800,
     "budget_max": 2600,
+    "origin_transport_budget": 600,
     "currency": "USD",
     "interests": ["temples", "food", "photography"],
     "travelers": 2,
@@ -126,6 +139,11 @@ curl -sS -X POST http://127.0.0.1:8000/plan \
 
 The call executes research and planning synchronously, stops at the durable review interrupt, and
 returns HTTP `201` with a `plan_id`, status URL, and review URL.
+
+`origin_transport_budget` is the user-provided estimated round-trip cost from the current location
+to the destination for all travelers. It is included in the total budget and deducted before the
+remaining amount is allocated across lodging (35%), food (20%), activities (25%), local transport
+(15%), and contingency (5%).
 
 ### Inspect the draft and workflow status
 
@@ -197,7 +215,8 @@ curl -sS http://127.0.0.1:8000/plan/PLAN_ID/final
 ```
 
 This endpoint returns HTTP `409` until the plan is approved. After approval it returns the frozen
-itinerary, budget, packing list, assumptions, plan ID, and finalization timestamp.
+itinerary, budget including origin transport, packing list, assumptions, plan ID, and finalization
+timestamp.
 
 ## Endpoints
 
@@ -221,11 +240,17 @@ itinerary, budget, packing list, assumptions, plan ID, and finalization timestam
 | `OPENAI_MODEL` | `gpt-5-mini` | Responses API model name |
 | `OPENAI_TIMEOUT_SECONDS` | `120` | Read timeout for OpenAI generation |
 | `HTTP_TIMEOUT_SECONDS` | `20` | Timeout for search, weather, and connections |
+| `REDIS_URL` | empty | Redis connection URL; for example `redis://localhost:6379/0` |
+| `CACHE_TTL_SECONDS` | `900` | Redis lifetime for successful provider responses; `0` disables caching |
 | `MAX_REVISIONS` | `5` | Maximum reject/modify cycles; approval remains available |
 
 `APP_MODE=live` fails clearly if the Serper key is unavailable. Open-Meteo forecasts
 are used only when the requested start date is inside its short forecast window; otherwise the
 response is explicitly labeled as a seasonal estimate.
+
+Cache entries use hashed keys and contain only successful results. Exact repeated live searches,
+live weather requests, and OpenAI structured-generation requests are reused until the TTL expires.
+Redis errors are logged and bypassed, so a cache outage does not fail plan creation.
 
 ## Check code quality
 
@@ -245,15 +270,14 @@ It creates a three-day plan, reads the draft, approves it, and retrieves the fin
 
 ## Docker
 
+After configuring `.env` as described above:
+
 ```bash
-docker build -t ai-travel-planner .
-docker run --rm -p 8000:8000 \
-  -v "$(pwd)/data:/app/data" \
-  --env-file .env \
-  ai-travel-planner
+docker compose up --build
 ```
 
-Mounting `data/` preserves SQLite checkpoints when the container is replaced.
+Docker Compose starts the API and Redis together. The `data/` bind mount preserves SQLite
+checkpoints, and the `redis-data` volume preserves cached entries until their TTL expires.
 
 ## Design decisions and tradeoffs
 
@@ -265,6 +289,9 @@ Mounting `data/` preserves SQLite checkpoints when the container is replaced.
 - **Deterministic fallback:** reviewers can exercise every path without keys or API charges. It is
   also used when LLM output fails date, budget, or structural consistency checks. All demo sources
   and estimates are labeled; live claims are not silently fabricated.
+- **Redis TTL cache:** exact successful provider responses are shared across app processes to
+  reduce latency, rate-limit usage, and LLM cost. Cache access fails open, and hashed keys avoid
+  placing raw queries or prompts in Redis key names.
 - **Small modification contract:** hotel and per-day edits are auditable and easy to validate.
 - **Research on reject, planning on modify:** rejection can invalidate evidence, so it repeats both
   agents. A targeted modification normally preserves research and only reruns planning.
@@ -318,7 +345,7 @@ day, and approving or rejecting a plan without using Swagger UI.
 ### 9. Monitoring and cost visibility
 
 Add structured logs, distributed tracing, performance metrics, alerts, provider-latency tracking,
-and LLM token-cost monitoring. Cache repeated queries when their results are safe to reuse.
+LLM token-cost monitoring, cache hit/miss metrics, and cache-stampede protection.
 
 ### 10. Safe concurrent review
 
@@ -345,8 +372,9 @@ activity duration and overlap, opening hours, and deeper preference satisfaction
 - A trip is between 1 and 21 calendar days and has 1-20 travelers.
 - `current_location` is the traveler origin used for research and planning context; provide a
   city/region and country rather than a street address.
-- The supplied budget covers lodging, food, activities, local transport, and contingency; travel
-  from the current location to the destination is excluded unless a later tool explicitly adds it.
+- The supplied budget includes the user-provided origin transport estimate plus lodging, food,
+  activities, local transport, and contingency at the destination.
+- Origin transport is a planning estimate supplied by the user, not a live fare or confirmed quote.
 - Currency conversion and booking are outside scope.
 - Search results are research inputs rather than guarantees; the plan carries verification notes.
 - One reviewer acts on a plan at a time in this local implementation.

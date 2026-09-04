@@ -3,6 +3,7 @@ from urllib.parse import quote_plus
 
 import httpx
 
+from app.cache import RedisCache
 from app.config import Settings
 from app.models import SearchResult, TravelRequest
 
@@ -14,9 +15,17 @@ class SearchConfigurationError(RuntimeError):
 class WebSearchTool:
     SERPER_URL = "https://google.serper.dev/search"
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        cache: RedisCache | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(timeout=settings.http_timeout_seconds)
+        self.cache = cache or RedisCache(
+            settings.redis_url, settings.cache_ttl_seconds, "search"
+        )
 
     def search(self, request: TravelRequest, limit: int = 8) -> list[SearchResult]:
         query = self._build_query(request)
@@ -24,7 +33,16 @@ class WebSearchTool:
             return self._demo_results(request)
         if not self.settings.serper_api_key:
             raise SearchConfigurationError("Live mode requires SERPER_API_KEY.")
-        return self._search_serper(query, limit)
+        cache_key = f"{limit}:{query.casefold()}"
+        cached = self.cache.get(cache_key)
+        if isinstance(cached, list):
+            try:
+                return [SearchResult.model_validate(item) for item in cached]
+            except (TypeError, ValueError):
+                pass
+        results = self._search_serper(query, limit)
+        self.cache.set(cache_key, [item.model_dump(mode="json") for item in results])
+        return results
 
     @staticmethod
     def _build_query(request: TravelRequest) -> str:

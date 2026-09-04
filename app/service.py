@@ -6,8 +6,10 @@ from uuid import uuid4
 import httpx
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
+from redis import Redis
 
 from app.agents import ItineraryPlannerAgent, ResearchAgent
+from app.cache import RedisCache
 from app.config import Settings
 from app.llm import StructuredLLM
 from app.models import (
@@ -42,10 +44,41 @@ class TravelPlanService:
 
         http_client = httpx.Client(timeout=settings.http_timeout_seconds)
         self._http_client = http_client
-        llm = StructuredLLM(settings, http_client)
+        self._redis_client = (
+            Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+            if settings.redis_url and settings.cache_ttl_seconds > 0
+            else None
+        )
+
+        def cache(namespace: str) -> RedisCache:
+            return RedisCache(
+                settings.redis_url,
+                settings.cache_ttl_seconds,
+                namespace,
+                self._redis_client,
+            )
+
+        llm = StructuredLLM(
+            settings,
+            http_client,
+            cache("llm"),
+        )
         research_agent = ResearchAgent(
-            WebSearchTool(settings, http_client),
-            DestinationContextTool(settings, http_client),
+            WebSearchTool(
+                settings,
+                http_client,
+                cache("search"),
+            ),
+            DestinationContextTool(
+                settings,
+                http_client,
+                cache("weather"),
+            ),
             llm,
         )
         itinerary_agent = ItineraryPlannerAgent(
@@ -159,4 +192,6 @@ class TravelPlanService:
 
     def close(self) -> None:
         self._http_client.close()
+        if self._redis_client is not None:
+            self._redis_client.close()
         self._connection.close()

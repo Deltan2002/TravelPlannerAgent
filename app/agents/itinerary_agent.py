@@ -173,8 +173,9 @@ class ItineraryPlannerAgent:
                 )
             )
         assumptions = [
-            f"Travel from {request.current_location} to {request.destination} is excluded from "
-            "the budget.",
+            f"The budget includes {request.origin_transport_budget:.2f} {request.currency} as a "
+            f"user-provided estimate for round-trip travel from {request.current_location} to "
+            f"{request.destination} for all travelers.",
             "Costs are planning estimates, not quotes or confirmed reservations.",
             "Travel times and opening hours must be verified against final venues and dates.",
         ]

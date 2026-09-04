@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 import httpx
 
+from app.cache import RedisCache
 from app.config import Settings
 from app.models import TravelRequest, WeatherSummary
 
@@ -11,9 +12,17 @@ class DestinationContextTool:
     GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
     FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        cache: RedisCache | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(timeout=settings.http_timeout_seconds)
+        self.cache = cache or RedisCache(
+            settings.redis_url, settings.cache_ttl_seconds, "weather"
+        )
 
     def get_weather(self, request: TravelRequest) -> WeatherSummary:
         if self.settings.app_mode == "demo":
@@ -22,9 +31,22 @@ class DestinationContextTool:
         if request.start_date < today or request.start_date > today + timedelta(days=15):
             return self._seasonal_estimate(request)
 
+        cache_key = (
+            f"{request.destination.casefold()}:{request.start_date.isoformat()}:"
+            f"{request.end_date.isoformat()}"
+        )
+        cached = self.cache.get(cache_key)
+        if isinstance(cached, dict):
+            try:
+                return WeatherSummary.model_validate(cached)
+            except (TypeError, ValueError):
+                pass
+
         coordinates = self._geocode(request.destination)
         if coordinates is None:
-            return self._seasonal_estimate(request)
+            result = self._seasonal_estimate(request)
+            self.cache.set(cache_key, result.model_dump(mode="json"))
+            return result
         latitude, longitude = coordinates
         end_date = min(request.end_date, today + timedelta(days=15))
         response = self.client.get(
@@ -44,11 +66,13 @@ class DestinationContextTool:
         lows = daily.get("temperature_2m_min") or []
         rain = daily.get("precipitation_probability_max") or []
         if not highs or not lows:
-            return self._seasonal_estimate(request)
+            result = self._seasonal_estimate(request)
+            self.cache.set(cache_key, result.model_dump(mode="json"))
+            return result
         avg_high = round(sum(highs) / len(highs), 1)
         avg_low = round(sum(lows) / len(lows), 1)
         max_rain = int(max(rain)) if rain else None
-        return WeatherSummary(
+        result = WeatherSummary(
             source="Open-Meteo forecast",
             summary=(
                 f"Forecast average {avg_low}C to {avg_high}C"
@@ -58,6 +82,8 @@ class DestinationContextTool:
             average_low_c=avg_low,
             precipitation_probability_max=max_rain,
         )
+        self.cache.set(cache_key, result.model_dump(mode="json"))
+        return result
 
     def _geocode(self, destination: str) -> tuple[float, float] | None:
         response = self.client.get(

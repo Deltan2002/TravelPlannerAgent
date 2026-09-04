@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
 
     http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    redis_url: str | None = None
+    cache_ttl_seconds: float = Field(default=900.0, ge=0, le=86400)
     max_revisions: int = Field(default=5, ge=1, le=20)
 
     def ensure_directories(self) -> None:

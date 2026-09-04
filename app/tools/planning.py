@@ -4,13 +4,17 @@ from app.models import BudgetBreakdown, TravelRequest, WeatherSummary
 class BudgetAllocatorTool:
     def allocate(self, request: TravelRequest) -> BudgetBreakdown:
         total = round((request.budget_min + request.budget_max) / 2, 2)
-        lodging = round(total * 0.35, 2)
-        food = round(total * 0.20, 2)
-        activities = round(total * 0.25, 2)
-        local_transport = round(total * 0.15, 2)
-        contingency = round(total - lodging - food - activities - local_transport, 2)
+        destination_budget = round(total - request.origin_transport_budget, 2)
+        lodging = round(destination_budget * 0.35, 2)
+        food = round(destination_budget * 0.20, 2)
+        activities = round(destination_budget * 0.25, 2)
+        local_transport = round(destination_budget * 0.15, 2)
+        contingency = round(
+            destination_budget - lodging - food - activities - local_transport, 2
+        )
         return BudgetBreakdown(
             total_budget=total,
+            origin_transport=request.origin_transport_budget,
             lodging=lodging,
             food=food,
             activities=activities,

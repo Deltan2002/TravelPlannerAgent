@@ -12,6 +12,7 @@ def main() -> None:
         "end_date": (start + timedelta(days=2)).isoformat(),
         "budget_min": 1800,
         "budget_max": 2600,
+        "origin_transport_budget": 600,
         "currency": "USD",
         "interests": ["temples", "food", "photography"],
         "travelers": 2,

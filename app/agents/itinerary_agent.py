@@ -1,16 +1,23 @@
+import logging
 from datetime import timedelta
+from typing import Literal
 
 from app.llm import StructuredLLM
 from app.models import (
+    STRETCH_BUDGET_MULTIPLIER,
     Activity,
     DraftPlan,
+    ItineraryContent,
     ItineraryDay,
     PlanModification,
     ResearchReport,
+    TransportOption,
     TravelRequest,
 )
 from app.prompts import ITINERARY_SYSTEM_PROMPT, build_itinerary_prompt
 from app.tools.planning import BudgetAllocatorTool, PackingListTool
+
+logger = logging.getLogger(__name__)
 
 
 class ItineraryPlannerAgent:
@@ -31,41 +38,134 @@ class ItineraryPlannerAgent:
         *,
         feedback: str | None = None,
         modifications: dict | None = None,
-    ) -> DraftPlan:
+    ) -> tuple[DraftPlan | None, DraftPlan | None]:
         parsed_modifications = (
             PlanModification.model_validate(modifications) if modifications else None
         )
-        budget = self.budget_allocator.allocate(request)
+        if not research.transport_options:
+            return None, None
+        selected_transport = research.transport_options[0]
+        planning_total = round((request.budget_min + request.budget_max) / 2, 2)
+        within_budget_plan = None
+        if selected_transport.priced_total_cost < request.budget_max:
+            within_total = (
+                planning_total
+                if selected_transport.priced_total_cost < planning_total
+                else request.budget_max
+            )
+            within_budget_plan = self._create_plan(
+                request,
+                research,
+                selected_transport,
+                total_budget=within_total,
+                scenario="within_budget",
+                feedback=feedback,
+                modifications=parsed_modifications,
+                use_llm=True,
+            )
+        stretch_total = round(request.budget_max * STRETCH_BUDGET_MULTIPLIER, 2)
+        stretch_plan = None
+        if selected_transport.priced_total_cost < stretch_total:
+            stretch_plan = self._create_plan(
+                request,
+                research,
+                selected_transport,
+                total_budget=stretch_total,
+                scenario="stretch",
+                feedback=feedback,
+                modifications=parsed_modifications,
+                use_llm=within_budget_plan is None,
+            )
+        return within_budget_plan, stretch_plan
+
+    def _create_plan(
+        self,
+        request: TravelRequest,
+        research: ResearchReport,
+        selected_transport: TransportOption,
+        *,
+        total_budget: float,
+        scenario: Literal["within_budget", "stretch"],
+        feedback: str | None,
+        modifications: PlanModification | None,
+        use_llm: bool,
+    ) -> DraftPlan:
+        over_budget_by = round(max(0, total_budget - request.budget_max), 2)
+        budget = self.budget_allocator.allocate(
+            request,
+            total_budget,
+            selected_transport.priced_total_cost,
+        )
         packing = self.packing_list.generate(request, research.weather)
-        prompt = build_itinerary_prompt(
+        generated = None
+        if use_llm:
+            prompt = build_itinerary_prompt(
+                request,
+                research,
+                budget,
+                feedback,
+                modifications,
+                scenario,
+                over_budget_by,
+                selected_transport,
+            )
+            try:
+                generated = self.llm.generate(
+                    system_prompt=ITINERARY_SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    output_model=ItineraryContent,
+                    schema_name=f"travel_itinerary_content_{scenario}",
+                )
+            except (RuntimeError, ValueError) as exc:
+                logger.info(
+                    "OpenAI itinerary unavailable; continuing with deterministic fallback: %s",
+                    exc,
+                )
+        plan = self._prepare_generated_plan(
             request,
             research,
             budget,
             packing,
-            feedback,
-            parsed_modifications,
+            generated,
+            selected_transport,
+            scenario,
+            over_budget_by,
         )
-        try:
-            generated = self.llm.generate(
-                system_prompt=ITINERARY_SYSTEM_PROMPT,
-                user_prompt=prompt,
-                output_model=DraftPlan,
-                schema_name="travel_itinerary",
-            )
-        except ValueError:
-            generated = None
-        plan = self._prepare_generated_plan(request, research, budget, packing, generated)
         if plan is None:
-            plan = self._deterministic_plan(request, research, budget, packing, feedback)
-        if parsed_modifications:
-            plan = self._apply_plan_modifications(plan, parsed_modifications)
+            plan = self._deterministic_plan(
+                request,
+                research,
+                budget,
+                packing,
+                selected_transport,
+                scenario,
+                over_budget_by,
+                feedback,
+            )
+        if modifications:
+            plan = self._apply_plan_modifications(plan, modifications)
         return plan
 
     @staticmethod
-    def _prepare_generated_plan(request, research, budget, packing, plan) -> DraftPlan | None:
+    def _prepare_generated_plan(
+        request,
+        research,
+        budget,
+        packing,
+        plan,
+        selected_transport,
+        scenario,
+        over_budget_by,
+    ) -> DraftPlan | None:
         if plan is None:
             return None
-        if plan.start_date != request.start_date or plan.end_date != request.end_date:
+        if len(plan.days) != request.days:
+            return None
+        if any(
+            day.day != index
+            or day.date != request.start_date + timedelta(days=index - 1)
+            for index, day in enumerate(plan.days, start=1)
+        ):
             return None
         activity_total = round(sum(day.estimated_total for day in plan.days), 2)
         if activity_total > budget.activities + 0.01:
@@ -79,6 +179,10 @@ class ItineraryPlannerAgent:
                     activity["source_url"] = None
         values.update(
             {
+                "scenario": scenario,
+                "over_budget_by": over_budget_by,
+                "requested_budget_min": request.budget_min,
+                "requested_budget_max": request.budget_max,
                 "current_location": request.current_location,
                 "destination": request.destination,
                 "start_date": request.start_date,
@@ -88,6 +192,7 @@ class ItineraryPlannerAgent:
                 "transport_options": [
                     option.model_dump() for option in research.transport_options
                 ],
+                "selected_transport": selected_transport.model_dump(),
                 "budget": budget.model_dump(),
                 "packing_list": packing,
             }
@@ -95,7 +200,16 @@ class ItineraryPlannerAgent:
         return DraftPlan.model_validate(values)
 
     @staticmethod
-    def _deterministic_plan(request, research, budget, packing, feedback) -> DraftPlan:
+    def _deterministic_plan(
+        request,
+        research,
+        budget,
+        packing,
+        selected_transport,
+        scenario,
+        over_budget_by,
+        feedback,
+    ) -> DraftPlan:
         source_urls = [str(result.url) for result in research.search_results if result.url]
         time_slots = ["09:00", "11:30", "14:30", "18:30"]
         interests = request.interests
@@ -104,6 +218,8 @@ class ItineraryPlannerAgent:
         if any(value in preferences for value in ("slow", "relaxed", "low-key")):
             activity_count = 2
         elif any(value in preferences for value in ("fast", "packed", "busy")):
+            activity_count = 4
+        if scenario == "stretch" and activity_count > 2:
             activity_count = 4
         preference_notes: list[str] = []
         if any(value in preferences for value in ("wheelchair", "accessible", "mobility")):
@@ -169,20 +285,86 @@ class ItineraryPlannerAgent:
                     estimated_total=round(sum(item.estimated_cost for item in activities), 2),
                 )
             )
+        transport_assumption = (
+            f"The sourced primary leg is estimated at "
+            f"{selected_transport.priced_total_cost:.2f} {selected_transport.currency} "
+            "for all travelers."
+            if selected_transport.price_scope == "primary_leg_only"
+            else f"The selected {selected_transport.mode} option is estimated at "
+            f"{selected_transport.priced_total_cost:.2f} {selected_transport.currency} "
+            "for all travelers."
+        )
         assumptions = [
-            f"The budget reserves up to {request.origin_transport_budget:.2f} {request.currency} "
-            f"for round-trip travel from {request.current_location} to {request.destination} "
-            f"for all travelers.",
+            transport_assumption,
             "Transport prices are search-derived estimates and must be verified before booking.",
-            "Costs are planning estimates, not quotes or confirmed reservations.",
+            "The budget categories are spending allocations, not verified prices or quotes.",
             "Travel times and opening hours must be verified against final venues and dates.",
         ]
+        if selected_transport.price_scope == "primary_leg_only":
+            assumptions.append(
+                "The transport total covers only the sourced primary leg. The onward connection "
+                "must be priced separately and paid from the remaining trip allocation."
+            )
+        elif len(selected_transport.priced_legs) > 1:
+            assumptions.append(
+                f"The transport total combines {len(selected_transport.priced_legs)} sourced "
+                f"route legs after converting each leg into {selected_transport.currency}."
+            )
+        if selected_transport.priced_total_in_destination_currency:
+            converted = selected_transport.priced_total_in_destination_currency
+            assumptions.append(
+                f"The same estimated transport total is approximately {converted.amount:.2f} "
+                f"{converted.currency} at a reference rate of {converted.exchange_rate:.6g}; "
+                "the amount paid may differ."
+            )
+        if selected_transport.fare_basis == "assumed_per_person":
+            assumptions.append(
+                "The provider snippet did not explicitly label the fare per person. The plan "
+                "uses that common listing assumption, which must be confirmed before booking."
+            )
+        if selected_transport.fare_date_basis == "dates_not_shown":
+            assumptions.append(
+                "The fare snippets do not display the requested dates. The search used those "
+                "dates, but the prices must be checked for the exact itinerary."
+            )
+        elif selected_transport.fare_date_basis == "partial_dates":
+            assumptions.append(
+                "Only part of the requested date range is visible in the fare snippets. Confirm "
+                "both departure and return dates before booking."
+            )
+        if selected_transport.connection_schedule_status == "not_verified":
+            assumptions.append(
+                "The separately sourced connection legs have not been schedule-matched. Allow "
+                "time for delays, immigration, baggage collection, and airport-station transfer."
+            )
+        if selected_transport.round_trip_basis == "one_way_doubled":
+            assumptions.append(
+                "A provider explicitly showed a one-way fare, so that leg was doubled for a "
+                "round-trip estimate. The actual return fare must be confirmed."
+            )
         if feedback:
             assumptions.append(f"This revision addresses reviewer feedback: {feedback[:300]}")
         if request.preferences:
             assumptions.append(f"User preferences: {', '.join(request.preferences)}.")
+        if scenario == "stretch":
+            assumptions.append(
+                f"This optional plan is {over_budget_by:.2f} {request.currency} above the user's "
+                "maximum budget and uses the difference for enhanced destination spending."
+            )
+        lodging_intro = (
+            "Use the enhanced lodging allocation for a central or higher-comfort stay."
+            if scenario == "stretch"
+            else "Choose a well-connected area that reduces daily transit."
+        )
         return DraftPlan(
-            title=f"{request.days}-day {request.destination} itinerary",
+            scenario=scenario,
+            over_budget_by=over_budget_by,
+            requested_budget_min=request.budget_min,
+            requested_budget_max=request.budget_max,
+            title=(
+                f"{request.days}-day {request.destination} "
+                f"{scenario.replace('_', ' ')} itinerary"
+            ),
             current_location=request.current_location,
             destination=request.destination,
             start_date=request.start_date,
@@ -190,8 +372,9 @@ class ItineraryPlannerAgent:
             travelers=request.travelers,
             transport_summary=research.transport_summary,
             transport_options=research.transport_options,
+            selected_transport=selected_transport,
             lodging_notes=[
-                "Choose a well-connected area that reduces daily transit.",
+                lodging_intro,
                 "Confirm cancellation terms, taxes, room occupancy, and accessibility directly.",
             ],
             days=days,

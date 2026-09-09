@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import threading
 from typing import Any
@@ -23,11 +24,15 @@ from app.models import (
 )
 from app.tools import (
     BudgetAllocatorTool,
+    CurrencyConverterTool,
     DestinationContextTool,
     PackingListTool,
+    PlanReadinessTool,
     WebSearchTool,
 )
 from app.workflow import TravelWorkflow
+
+logger = logging.getLogger(__name__)
 
 
 class TravelPlanService:
@@ -73,6 +78,11 @@ class TravelPlanService:
                 settings,
                 http_client,
                 cache("search"),
+                CurrencyConverterTool(
+                    settings,
+                    http_client,
+                    cache("currency"),
+                ),
             ),
             DestinationContextTool(
                 settings,
@@ -84,9 +94,12 @@ class TravelPlanService:
         itinerary_agent = ItineraryPlannerAgent(
             BudgetAllocatorTool(), PackingListTool(), llm
         )
-        self.graph = TravelWorkflow(settings, research_agent, itinerary_agent).compile(
-            self._checkpointer
-        )
+        self.graph = TravelWorkflow(
+            settings,
+            research_agent,
+            itinerary_agent,
+            PlanReadinessTool(),
+        ).compile(self._checkpointer)
 
     @staticmethod
     def _config(plan_id: str) -> dict[str, dict[str, str]]:
@@ -100,11 +113,15 @@ class TravelPlanService:
             "request": request.model_dump(mode="json"),
             "research": None,
             "draft_plan": None,
+            "draft_readiness": None,
+            "stretch_plan": None,
+            "stretch_readiness": None,
             "final_plan": None,
             "review_history": [],
             "revision_count": 0,
             "review_feedback": None,
             "modifications": None,
+            "selected_plan": None,
             "awaiting_input": None,
             "error": None,
         }
@@ -112,12 +129,16 @@ class TravelPlanService:
             with self._lock:
                 self.graph.invoke(initial, config=self._config(plan_id))
         except Exception as exc:
+            logger.exception("Plan creation failed")
             self._mark_failed(plan_id, exc)
             raise RuntimeError(str(exc)) from exc
         return PlanAccepted(
             plan_id=plan_id,
             status=PlanStatus.AWAITING_REVIEW,
-            message="Draft created. Submit a human review decision to continue.",
+            message=(
+                "Planning and readiness checks completed. Review the available budget "
+                "scenarios to continue."
+            ),
             status_url=f"/plan/{plan_id}",
             review_url=f"/plan/{plan_id}/review",
         )
@@ -144,6 +165,19 @@ class TravelPlanService:
                     f"maximum revision count ({self.settings.max_revisions}) reached; "
                     "approve the plan"
                 )
+            if review.action == ReviewAction.APPROVE:
+                choice = review.plan_choice or "within_budget"
+                plan_key = "draft_plan" if choice == "within_budget" else "stretch_plan"
+                if not current.get(plan_key):
+                    raise ValueError(f"the {choice} plan is not available")
+                readiness_key = (
+                    "draft_readiness" if choice == "within_budget" else "stretch_readiness"
+                )
+                readiness = current.get(readiness_key)
+                if readiness and readiness.get("status") == "blocked":
+                    raise ValueError(
+                        f"the {choice} plan has unresolved readiness blockers"
+                    )
             if review.modifications:
                 request = TravelRequest.model_validate(current["request"])
                 invalid_days = sorted(

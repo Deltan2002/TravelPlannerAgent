@@ -15,10 +15,59 @@ from app.models import (
 )
 from app.service import TravelPlanService
 
+PLAN_EXAMPLES = {
+    "connected_destination": {
+        "summary": "Connected route to a destination without a major airport",
+        "description": "Search for a flight gateway followed by a train or bus to Kyoto.",
+        "value": {
+            "current_location": "Bangalore, India",
+            "destination": "Kyoto, Japan",
+            "start_date": "2026-10-10",
+            "end_date": "2026-10-17",
+            "budget_min": 150000,
+            "budget_max": 300000,
+            "currency": "INR",
+            "interests": ["live music", "Japanese culture", "food", "temples"],
+            "travelers": 1,
+            "preferences": ["public transport", "centrally located hotel"],
+            "transport_modes": ["flight", "train", "bus"],
+            "allow_transport_connections": True,
+            "include_premium_fares": False,
+        },
+    },
+    "direct_destination": {
+        "summary": "Direct or single-mode route",
+        "description": "Prefer a direct train or flight and disable gateway connections.",
+        "value": {
+            "current_location": "London, United Kingdom",
+            "destination": "Paris, France",
+            "start_date": "2026-11-05",
+            "end_date": "2026-11-09",
+            "budget_min": 1200,
+            "budget_max": 2000,
+            "currency": "GBP",
+            "interests": ["art", "food", "architecture"],
+            "travelers": 2,
+            "preferences": ["central hotel", "public transport"],
+            "transport_modes": ["train", "flight"],
+            "allow_transport_connections": False,
+            "include_premium_fares": False,
+        },
+    },
+}
+
 REVIEW_EXAMPLES = {
     "approve": {
-        "summary": "Approve the draft",
+        "summary": "Approve the within-budget plan",
         "value": {"action": "approve", "feedback": "Ready to finalize."},
+    },
+    "approve_stretch": {
+        "summary": "Approve the optional stretch plan",
+        "value": {
+            "action": "approve",
+            "plan_choice": "stretch",
+            "feedback": "The additional cost is acceptable.",
+        },
     },
     "reject": {
         "summary": "Reject and request a new draft",
@@ -79,7 +128,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=status.HTTP_201_CREATED,
         tags=["plans"],
     )
-    def create_plan(request: TravelRequest) -> PlanAccepted:
+    def create_plan(
+        request: Annotated[TravelRequest, Body(openapi_examples=PLAN_EXAMPLES)],
+    ) -> PlanAccepted:
         try:
             return service().create_plan(request)
         except RuntimeError as exc:

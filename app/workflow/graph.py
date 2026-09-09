@@ -15,6 +15,7 @@ from app.models import (
     ReviewRequest,
     TravelRequest,
 )
+from app.tools import PlanReadinessTool
 from app.workflow.state import TravelState
 
 
@@ -24,10 +25,12 @@ class TravelWorkflow:
         settings: Settings,
         research_agent: ResearchAgent,
         itinerary_agent: ItineraryPlannerAgent,
+        readiness_tool: PlanReadinessTool,
     ) -> None:
         self.settings = settings
         self.research_agent = research_agent
         self.itinerary_agent = itinerary_agent
+        self.readiness_tool = readiness_tool
 
     def compile(self, checkpointer):
         builder = StateGraph(TravelState)
@@ -66,20 +69,52 @@ class TravelWorkflow:
 
         request = TravelRequest.model_validate(state["request"])
         research = ResearchReport.model_validate(state["research"])
-        draft = self.itinerary_agent.run(
+        draft, stretch = self.itinerary_agent.run(
             request,
             research,
             feedback=state.get("review_feedback"),
             modifications=state.get("modifications"),
         )
+        draft_readiness = (
+            self.readiness_tool.evaluate(request, research, draft) if draft else None
+        )
+        stretch_readiness = (
+            self.readiness_tool.evaluate(request, research, stretch) if stretch else None
+        )
         awaiting = {
             "kind": "itinerary_review",
-            "message": "Review the draft and approve, reject with feedback, or modify it.",
+            "message": (
+                "Review each scenario and its readiness checks, then approve, reject, "
+                "or modify the plan."
+            ),
             "allowed_actions": ["approve", "reject", "modify"],
+            "available_plan_choices": [
+                choice
+                for choice, plan, readiness in (
+                    ("within_budget", draft, draft_readiness),
+                    ("stretch", stretch, stretch_readiness),
+                )
+                if plan is not None and readiness is not None and readiness.status != "blocked"
+            ],
+            "readiness": {
+                "within_budget": (
+                    draft_readiness.model_dump(mode="json") if draft_readiness else None
+                ),
+                "stretch": (
+                    stretch_readiness.model_dump(mode="json") if stretch_readiness else None
+                ),
+            },
             "review_endpoint": f"/plan/{state['plan_id']}/review",
         }
         return {
-            "draft_plan": draft.model_dump(mode="json"),
+            "draft_plan": draft.model_dump(mode="json") if draft else None,
+            "draft_readiness": (
+                draft_readiness.model_dump(mode="json") if draft_readiness else None
+            ),
+            "stretch_plan": stretch.model_dump(mode="json") if stretch else None,
+            "stretch_readiness": (
+                stretch_readiness.model_dump(mode="json") if stretch_readiness else None
+            ),
             "status": PlanStatus.AWAITING_REVIEW.value,
             "awaiting_input": awaiting,
             "error": None,
@@ -96,6 +131,11 @@ class TravelWorkflow:
             modifications=(
                 review.modifications.model_dump(mode="json") if review.modifications else None
             ),
+            plan_choice=(
+                (review.plan_choice or "within_budget")
+                if review.action == ReviewAction.APPROVE
+                else None
+            ),
             submitted_at=datetime.now(UTC),
         )
         history = [*state.get("review_history", []), record.model_dump(mode="json")]
@@ -104,7 +144,13 @@ class TravelWorkflow:
             "awaiting_input": None,
         }
         if review.action == ReviewAction.APPROVE:
-            update.update({"review_feedback": review.feedback, "modifications": None})
+            update.update(
+                {
+                    "review_feedback": review.feedback,
+                    "modifications": None,
+                    "selected_plan": review.plan_choice or "within_budget",
+                }
+            )
             return Command(update=update, goto="finalize")
 
         next_revision = state.get("revision_count", 0) + 1
@@ -120,19 +166,27 @@ class TravelWorkflow:
                     if review.modifications
                     else None
                 ),
+                "selected_plan": None,
             }
         )
         if review.action == ReviewAction.REJECT:
             return Command(update=update, goto="research_agent")
-        return Command(update=update, goto="itinerary_planner_agent") # for modifications
+        return Command(update=update, goto="itinerary_planner_agent")
 
     @staticmethod
     def finalize(state: TravelState) -> TravelState:
+        selected_plan = state.get("selected_plan") or "within_budget"
+        plan_key = "draft_plan" if selected_plan == "within_budget" else "stretch_plan"
+        approved_plan = state.get(plan_key)
+        if approved_plan is None:
+            raise ValueError(f"the {selected_plan} plan is not available")
         final_values = {
-            **state["draft_plan"],
+            **approved_plan,
             "plan_id": state["plan_id"],
             "finalized_at": datetime.now(UTC),
-            "approval_note": "Approved through the human-in-the-loop review endpoint.",
+            "approval_note": (
+                f"The {selected_plan} plan was approved through the human review endpoint."
+            ),
         }
         final_plan = FinalPlan.model_validate(final_values)
         return {
@@ -141,5 +195,6 @@ class TravelWorkflow:
             "awaiting_input": None,
             "review_feedback": None,
             "modifications": None,
+            "selected_plan": selected_plan,
             "error": None,
         }

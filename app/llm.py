@@ -53,7 +53,7 @@ class StructuredLLM:
         *,
         system_prompt: str,
         user_prompt: str,
-        output_model: type[ModelT], # Might contain draft plan or research report
+        output_model: type[ModelT],
         schema_name: str,
     ) -> ModelT | None:
         if not self.enabled:

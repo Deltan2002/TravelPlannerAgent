@@ -1,8 +1,12 @@
+import logging
+
 from app.llm import StructuredLLM
-from app.models import ResearchReport, TransportOption, TravelRequest
+from app.models import ResearchNarrative, ResearchReport, TransportOption, TravelRequest
 from app.prompts import RESEARCH_SYSTEM_PROMPT, build_research_prompt
 from app.tools.destination_context import DestinationContextTool
 from app.tools.web_search import WebSearchTool
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchAgent:
@@ -24,29 +28,30 @@ class ResearchAgent:
             request,
             weather,
             search_results,
-            transport_search_results,
-            transport_options,
             feedback,
         )
         try:
             generated = self.llm.generate(
                 system_prompt=RESEARCH_SYSTEM_PROMPT,
                 user_prompt=prompt,
-                output_model=ResearchReport,
-                schema_name="destination_research",
+                output_model=ResearchNarrative,
+                schema_name="destination_research_narrative",
             )
-        except ValueError:
+        except (RuntimeError, ValueError) as exc:
+            logger.info(
+                "OpenAI research unavailable; continuing with deterministic fallback: %s",
+                exc,
+            )
             generated = None
         if generated is not None:
-            return generated.model_copy(
-                update={
-                    "destination": request.destination,
-                    "transport_summary": self._transport_summary(request, transport_options),
-                    "transport_options": transport_options,
-                    "transport_search_results": transport_search_results,
-                    "weather": weather,
-                    "search_results": search_results,
-                }
+            return ResearchReport(
+                destination=request.destination,
+                **generated.model_dump(),
+                transport_summary=self._transport_summary(request, transport_options),
+                transport_options=transport_options,
+                transport_search_results=transport_search_results,
+                weather=weather,
+                search_results=search_results,
             )
         return self._deterministic_report(
             request,
@@ -116,13 +121,38 @@ class ResearchAgent:
     ) -> str:
         if not options:
             return (
-                f"No sourced round-trip transport option was found at or below "
-                f"{request.origin_transport_budget:.2f} {request.currency} for all travelers."
+                f"No verified round-trip transport option was found from "
+                f"{request.current_location} to {request.destination}."
             )
         cheapest = options[0]
+        date_note = {
+            "exact_dates": "Both requested dates appear in the selected fare evidence.",
+            "partial_dates": "Only part of the requested date range appears in the fare evidence.",
+            "dates_not_shown": "The fare snippets do not display the requested dates.",
+        }[cheapest.fare_date_basis]
+        if cheapest.price_scope == "primary_leg_only":
+            return (
+                f"Found {len(options)} connected transport option(s), sorted by the sourced "
+                f"primary-leg cost. The lowest sourced portion is "
+                f"{cheapest.priced_total_cost:.2f} {cheapest.currency}. "
+                f"{cheapest.connection_note} {date_note}"
+            )
+        if cheapest.mode == "multimodal":
+            return (
+                f"Found {len(options)} transport option(s), sorted by the complete estimated "
+                f"round-trip cost. The lowest connected route has "
+                f"{len(cheapest.priced_legs)} priced legs totaling "
+                f"{cheapest.priced_total_cost:.2f} {cheapest.currency} for all travelers. "
+                f"The separate legs are not schedule-matched. {date_note}"
+            )
+        fare_note = (
+            " The provider snippet did not explicitly say per person, so the displayed fare is "
+            "treated as a per-person estimate and must be verified."
+            if cheapest.fare_basis == "assumed_per_person"
+            else ""
+        )
         return (
-            f"Found {len(options)} sourced option(s) within the "
-            f"{request.origin_transport_budget:.2f} {request.currency} allocation. "
-            f"The lowest estimated total is {cheapest.estimated_total_cost:.2f} "
-            f"{cheapest.currency} by {cheapest.mode}."
+            f"Found {len(options)} transport option(s), sorted by estimated total cost. "
+            f"The lowest estimated total is {cheapest.priced_total_cost:.2f} "
+            f"{cheapest.currency} by {cheapest.mode}. {date_note}{fare_note}"
         )

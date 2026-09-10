@@ -116,6 +116,7 @@ class TravelRequest(StrictModel):
 class DayModification(StrictModel):
     day: int = Field(ge=1, le=21)
     replace_activities_with: list[str] = Field(default_factory=list, max_length=8)
+    avoid_places: list[str] = Field(default_factory=list, max_length=12)
     note: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -124,9 +125,15 @@ class DayModification(StrictModel):
         if any(len(value) > 200 for value in activities):
             raise ValueError("each replacement activity must contain at most 200 characters")
         self.replace_activities_with = list(dict.fromkeys(activities))
+        avoided = [value.strip() for value in self.avoid_places if value.strip()]
+        if any(len(value) > 120 for value in avoided):
+            raise ValueError("each avoided place must contain at most 120 characters")
+        self.avoid_places = list(dict.fromkeys(avoided))
         self.note = self.note.strip() if self.note and self.note.strip() else None
-        if not self.replace_activities_with and self.note is None:
-            raise ValueError("a day change requires replacement activities, a note, or both")
+        if not self.replace_activities_with and not self.avoid_places and self.note is None:
+            raise ValueError(
+                "a day change requires replacement activities, avoided places, a note, or both"
+            )
         return self
 
 
@@ -427,7 +434,7 @@ class ItineraryDay(StrictModel):
             raise ValueError("activities within a day cannot have duplicate times")
         expected_total = round(sum(item.estimated_cost for item in self.activities), 2)
         if abs(self.estimated_total - expected_total) > 0.01:
-            raise ValueError("estimated_total must equal the sum of activity costs")
+            self.estimated_total = expected_total
         return self
 
 

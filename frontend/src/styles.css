@@ -152,6 +152,81 @@ h3 {
   margin-bottom: 28px;
 }
 
+.plan-history {
+  border-top: 1px solid #dfe1e5;
+  padding: 28px 0 8px;
+}
+
+.history-count {
+  color: #5f6368;
+  font-size: 0.9rem;
+}
+
+.result-header-actions {
+  align-items: flex-end;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.result-header-actions a {
+  font-size: 0.9rem;
+}
+
+.history-list {
+  margin-top: 18px;
+}
+
+.empty-history {
+  color: #5f6368;
+  margin: 18px 0 0;
+}
+
+.history-entry {
+  border-top: 1px solid #dfe1e5;
+  padding: 18px 0;
+}
+
+.history-entry-heading,
+.history-entry-heading > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.history-entry-heading > div {
+  justify-content: flex-start;
+}
+
+.history-entry-heading strong {
+  text-transform: capitalize;
+}
+
+.history-entry-heading time,
+.history-entry p,
+.history-day-change span {
+  color: #5f6368;
+}
+
+.history-entry p {
+  margin: 10px 0 0;
+}
+
+.latest-marker {
+  border-left: 2px solid #1a73e8;
+  color: #1a5fb4;
+  font-size: 0.8rem;
+  padding-left: 7px;
+}
+
+.history-day-change {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding-left: 14px;
+}
+
 .section-heading,
 .section-title-row,
 .readiness-heading {
@@ -778,6 +853,11 @@ legend {
   .readiness-heading,
   .weather-card {
     flex-direction: column;
+  }
+
+  .result-header-actions {
+    align-items: flex-start;
+    justify-items: start;
   }
 
   .check-row,

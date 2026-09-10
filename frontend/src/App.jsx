@@ -23,6 +23,7 @@ const initialReview = {
   hotel_preference: "",
   day: 1,
   replacement_activities: "",
+  avoid_places: "",
   note: "",
 };
 
@@ -61,6 +62,19 @@ function label(value) {
 function displayDate(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
   return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
+function displayDateTime(value) {
+  if (!value) return "Time unavailable";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 function apiDate(value) {
@@ -518,12 +532,20 @@ function ReviewPanel({
               placeholder="Tea ceremony, riverside walk"
             />
           </label>
+          <label>
+            Places to avoid
+            <input
+              value={review.avoid_places}
+              onChange={(event) => update("avoid_places", event.target.value)}
+              placeholder="Altstadt"
+            />
+          </label>
           <label className="wide-field">
-            Day note
+            Day instruction
             <input
               value={review.note}
               onChange={(event) => update("note", event.target.value)}
-              placeholder="Keep the afternoon relaxed"
+              placeholder="Do not include Altstadt on this day"
             />
           </label>
         </div>
@@ -533,6 +555,69 @@ function ReviewPanel({
         {loading ? "Working…" : review.action + " plan"}
       </button>
     </form>
+  );
+}
+
+function PlanHistory({ history = [] }) {
+  return (
+    <section className="plan-history" id="plan-history">
+      <div className="section-title-row">
+        <div>
+          <h2>Plan history</h2>
+          <p>Review decisions and requested changes for this plan.</p>
+        </div>
+        <span className="history-count">
+          {history.length} {history.length === 1 ? "event" : "events"}
+        </span>
+      </div>
+
+      {history.length ? (
+        <div className="history-list">
+          {history.map((record, index) => {
+          const changes = record.modifications?.day_changes || [];
+          const latest = index === history.length - 1;
+          return (
+            <article className="history-entry" key={`${record.submitted_at}-${index}`}>
+              <div className="history-entry-heading">
+                <div>
+                  <strong>{label(record.action)}</strong>
+                  {latest && <span className="latest-marker">Latest</span>}
+                </div>
+                <time dateTime={record.submitted_at}>{displayDateTime(record.submitted_at)}</time>
+              </div>
+
+              {record.plan_choice && (
+                <p>
+                  Scenario: <strong>{label(record.plan_choice)}</strong>
+                </p>
+              )}
+              {record.feedback && <p>Feedback: {record.feedback}</p>}
+              {record.modifications?.hotel_preference && (
+                <p>Hotel preference: {record.modifications.hotel_preference}</p>
+              )}
+
+              {changes.map((change, changeIndex) => (
+                <div className="history-day-change" key={`${change.day}-${changeIndex}`}>
+                  <strong>Day {change.day}</strong>
+                  {change.avoid_places?.length > 0 && (
+                    <span>Places to avoid: {change.avoid_places.join(", ")}</span>
+                  )}
+                  {change.replace_activities_with?.length > 0 && (
+                    <span>
+                      Replacement activities: {change.replace_activities_with.join(", ")}
+                    </span>
+                  )}
+                  {change.note && <span>Instruction: {change.note}</span>}
+                </div>
+              ))}
+            </article>
+          );
+          })}
+        </div>
+      ) : (
+        <p className="empty-history">No review actions have been performed yet.</p>
+      )}
+    </section>
   );
 }
 
@@ -703,19 +788,23 @@ export default function App() {
     }
     if (review.action === "modify") {
       const activities = list(review.replacement_activities);
-      const note = review.note.trim();
+      const avoidedPlaces = list(review.avoid_places);
+      const note = review.note.trim() || review.feedback.trim();
       const hotel = review.hotel_preference.trim();
-      if (!hotel && !activities.length && !note) {
-        setError("Add a hotel preference, replacement activities, or a day note.");
+      if (!hotel && !activities.length && !avoidedPlaces.length && !note) {
+        setError(
+          "Add a hotel preference, replacement activities, places to avoid, or a day instruction.",
+        );
         return;
       }
       body.modifications = {};
       if (hotel) body.modifications.hotel_preference = hotel;
-      if (activities.length || note) {
+      if (activities.length || avoidedPlaces.length || note) {
         body.modifications.day_changes = [
           {
             day: Number(review.day),
             replace_activities_with: activities,
+            avoid_places: avoidedPlaces,
             note: note || null,
           },
         ];
@@ -927,7 +1016,12 @@ export default function App() {
                     {plan.request.current_location} → {plan.request.destination}
                   </h2>
                 </div>
-                <StatusBadge value={plan.status} />
+                <div className="result-header-actions">
+                  <StatusBadge value={plan.status} />
+                  {plan.review_history?.length > 0 && (
+                    <a href="#plan-history">View history ({plan.review_history.length})</a>
+                  )}
+                </div>
               </section>
 
               <section className="panel result-panel">
@@ -973,6 +1067,8 @@ export default function App() {
                 onSubmit={handleReview}
                 loading={loading}
               />
+
+              <PlanHistory history={plan.review_history} />
             </>
           )}
         </section>

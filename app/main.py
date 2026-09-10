@@ -87,6 +87,7 @@ REVIEW_EXAMPLES = {
                     {
                         "day": 2,
                         "replace_activities_with": ["Tea ceremony", "Riverside walk"],
+                        "avoid_places": ["Crowded nightlife district"],
                         "note": "Keep the afternoon low-key.",
                     }
                 ],

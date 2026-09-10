@@ -415,8 +415,6 @@ class ItineraryPlannerAgent:
             change = indexed_changes.get(day["day"])
             if change is None:
                 continue
-            if change.note:
-                day["daily_notes"].insert(0, change.note)
             if change.replace_activities_with:
                 existing_total = day["estimated_total"]
                 activity_count = len(change.replace_activities_with)
@@ -449,4 +447,77 @@ class ItineraryPlannerAgent:
                 day["estimated_total"] = round(
                     sum(item["estimated_cost"] for item in day["activities"]), 2
                 )
+            avoided_places = list(change.avoid_places)
+            if change.note:
+                inferred_place = ItineraryPlannerAgent._place_to_avoid(change.note)
+                if inferred_place:
+                    avoided_places.append(inferred_place)
+            avoided_places = list(
+                dict.fromkeys(place.casefold() for place in avoided_places if place.strip())
+            )
+            if avoided_places:
+                def contains_avoided_place(text, places=tuple(avoided_places)):
+                    return any(place in str(text).casefold() for place in places)
+
+                if contains_avoided_place(day["theme"]):
+                    day["theme"] = "Alternative neighborhood and local experiences"
+                day["daily_notes"] = [
+                    note
+                    for note in day["daily_notes"]
+                    if not contains_avoided_place(note)
+                ]
+                day["daily_notes"].insert(
+                    0,
+                    "Keep this day's activities outside the location excluded by the reviewer.",
+                )
+                for activity in day["activities"]:
+                    if not contains_avoided_place(
+                        " ".join(
+                            (
+                                activity["title"],
+                                activity["description"],
+                                activity["category"],
+                            )
+                        )
+                    ):
+                        continue
+                    activity["title"] = (
+                        "Arrival, check-in, and alternative neighborhood orientation"
+                        if "arrival" in activity["title"].casefold()
+                        else "Meal in an alternative neighborhood"
+                        if any(
+                            word in activity["title"].casefold()
+                            for word in ("food", "meal", "lunch", "dinner", "breakfast")
+                        )
+                        else "Alternative local experience"
+                    )
+                    activity["description"] = (
+                        "Reviewer-requested alternative; select a different researched area and "
+                        "verify its price, hours, transit, accessibility, and availability."
+                    )
+                    activity["category"] = "reviewer modification"
+                    activity["source_url"] = None
+            elif change.note:
+                day["daily_notes"].insert(0, change.note)
         return DraftPlan.model_validate(values)
+
+    @staticmethod
+    def _place_to_avoid(instruction: str) -> str | None:
+        patterns = (
+            r"\bdo\s*not\s+want(?:\s+to\s+(?:visit|include|use))?\s+(.+)",
+            r"\bdon'?t\s+want(?:\s+to\s+(?:visit|include|use))?\s+(.+)",
+            r"\b(?:avoid|exclude|remove)\s+(.+)",
+            r"\bwithout\s+(.+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, instruction, flags=re.IGNORECASE)
+            if match is None:
+                continue
+            place = re.split(
+                r"\b(?:on|for)\s+(?:this\s+day|day\s+\d+)\b",
+                match.group(1),
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0].strip(" .,!;:")
+            return place[:120] or None
+        return None

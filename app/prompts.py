@@ -19,7 +19,8 @@ RESEARCH_SYSTEM_PROMPT = (
 ITINERARY_SYSTEM_PROMPT = (
     "You are an itinerary planner. Write only the title, lodging notes, day-by-day "
     "itinerary, and assumptions requested by the schema. Match every trip date exactly "
-    "once, keep activity costs within the activity allocation, use realistic travel "
+    "once using YYYY-MM-DD in structured date fields, keep activity costs within the "
+    "activity allocation, use realistic travel "
     "buffers, and do not claim reservations were made."
 )
 
@@ -84,7 +85,6 @@ def build_itinerary_prompt(
             else "Create a practical cost-conscious itinerary with destination-specific places, "
             "realistic timing, and sensible daily travel."
         ),
-        "display_date_format": "DD/MM/YYYY in human-readable text",
         "amount_over_maximum_budget": over_budget_by,
         "selected_transport": {
             "mode": selected_transport.mode,

@@ -81,21 +81,80 @@ class TravelWorkflow:
         stretch_readiness = (
             self.readiness_tool.evaluate(request, research, stretch) if stretch else None
         )
+        scenarios = (
+            ("within_budget", draft, draft_readiness),
+            ("stretch", stretch, stretch_readiness),
+        )
+        available_plan_choices = [
+            choice
+            for choice, plan, readiness in scenarios
+            if plan is not None and readiness is not None and readiness.status != "blocked"
+        ]
+        blocking_issues = [
+            {
+                "code": f"{choice}_{check.name}",
+                "scenario": choice,
+                "title": check.name.replace("_", " ").title(),
+                "message": check.message,
+                "next_step": "Modify the plan or reject it and request new research.",
+            }
+            for choice, _, readiness in scenarios
+            if readiness is not None
+            for check in readiness.checks
+            if check.status == "blocker"
+        ]
+        if draft is None and stretch is None:
+            if not research.transport_options:
+                blocking_issues.append(
+                    {
+                        "code": "transport_not_found",
+                        "scenario": None,
+                        "title": "No verified transport option",
+                        "message": research.transport_summary,
+                        "next_step": (
+                            "Reject this result and ask for broader transport research, or "
+                            "create a new request with different dates, modes, or budget."
+                        ),
+                    }
+                )
+            else:
+                cheapest_transport = research.transport_options[0].priced_total_cost
+                blocking_issues.append(
+                    {
+                        "code": "transport_over_budget",
+                        "scenario": None,
+                        "title": "Transport exceeds the planning limit",
+                        "message": (
+                            f"The lowest transport estimate is {cheapest_transport:.2f} "
+                            f"{request.currency}, so no itinerary fits the current budget range."
+                        ),
+                        "next_step": (
+                            "Create a new request with a higher maximum budget, different dates, "
+                            "or different transport modes."
+                        ),
+                    }
+                )
+        allowed_actions = (
+            ["approve", "reject", "modify"]
+            if available_plan_choices
+            else ["reject", "modify"]
+            if draft is not None or stretch is not None
+            else ["reject"]
+        )
         awaiting = {
             "kind": "itinerary_review",
             "message": (
                 "Review each scenario and its readiness checks, then approve, reject, "
                 "or modify the plan."
             ),
-            "allowed_actions": ["approve", "reject", "modify"],
-            "available_plan_choices": [
-                choice
-                for choice, plan, readiness in (
-                    ("within_budget", draft, draft_readiness),
-                    ("stretch", stretch, stretch_readiness),
-                )
-                if plan is not None and readiness is not None and readiness.status != "blocked"
-            ],
+            "allowed_actions": allowed_actions,
+            "available_plan_choices": available_plan_choices,
+            "blocking_issues": blocking_issues,
+            "unavailable_fields": (
+                ["draft_plan", "draft_readiness", "stretch_plan", "stretch_readiness"]
+                if draft is None and stretch is None
+                else []
+            ),
             "readiness": {
                 "within_budget": (
                     draft_readiness.model_dump(mode="json") if draft_readiness else None

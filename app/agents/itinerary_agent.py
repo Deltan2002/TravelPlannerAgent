@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import timedelta
 from typing import Literal
 
@@ -74,7 +75,7 @@ class ItineraryPlannerAgent:
                 scenario="stretch",
                 feedback=feedback,
                 modifications=parsed_modifications,
-                use_llm=within_budget_plan is None,
+                use_llm=True,
             )
         return within_budget_plan, stretch_plan
 
@@ -210,9 +211,15 @@ class ItineraryPlannerAgent:
         over_budget_by,
         feedback,
     ) -> DraftPlan:
-        source_urls = [str(result.url) for result in research.search_results if result.url]
         time_slots = ["09:00", "11:30", "14:30", "18:30"]
         interests = request.interests
+        attraction_names = []
+        for attraction in research.attractions:
+            name = re.split(r"\s+[—–-]\s+|\s*\(", attraction, maxsplit=1)[0].strip()
+            if name and name not in attraction_names:
+                attraction_names.append(name[:120])
+        if not attraction_names:
+            attraction_names = [f"a signature {interest} area" for interest in interests]
         preferences = " ".join(request.preferences).lower()
         activity_count = 3
         if any(value in preferences for value in ("slow", "relaxed", "low-key")):
@@ -234,40 +241,53 @@ class ItineraryPlannerAgent:
         if any(value in preferences for value in ("public transport", "no car", "transit")):
             preference_notes.append("Prioritize activities connected by public transport.")
         days: list[ItineraryDay] = []
-        remaining_activity_budget = budget.activities
+        remaining_activity_budget = round(
+            budget.activities * (0.75 if scenario == "stretch" else 0.65),
+            2,
+        )
+        daily_weights = [1 + ((index * 3) % 5) * 0.08 for index in range(request.days)]
+        remaining_weight = sum(daily_weights)
         for index in range(request.days):
             interest = interests[index % len(interests)]
+            attraction = attraction_names[index % len(attraction_names)]
             titles = [
-                f"Explore a signature {interest} area",
-                "Local lunch and neighborhood walk",
-                "Cultural highlight or viewpoint",
-                "Evening food or arts experience",
+                f"Explore {attraction}",
+                f"Local lunch and walk near {attraction}",
+                f"{interest.title()} experience in {request.destination}",
+                f"Evening experience near {attraction}",
             ][:activity_count]
             if index == 0:
                 titles[0] = "Arrival, check-in, and neighborhood orientation"
             if index == request.days - 1:
                 titles[-1] = "Flexible closing activity and departure preparation"
-            remaining_days = request.days - index
-            daily_budget = round(remaining_activity_budget / remaining_days, 2)
+            daily_budget = (
+                remaining_activity_budget
+                if index == request.days - 1
+                else round(
+                    remaining_activity_budget * daily_weights[index] / remaining_weight,
+                    2,
+                )
+            )
             remaining_activity_budget = round(remaining_activity_budget - daily_budget, 2)
-            per_activity = round(daily_budget / len(titles), 2)
-            activity_costs = [per_activity] * len(titles)
+            remaining_weight -= daily_weights[index]
+            cost_weights = [1.0, 1.35, 1.2, 0.8][: len(titles)]
+            activity_costs = [
+                round(daily_budget * weight / sum(cost_weights), 2)
+                for weight in cost_weights
+            ]
             activity_costs[-1] = round(daily_budget - sum(activity_costs[:-1]), 2)
             activities = [
                 Activity(
                     time=time_slots[position],
                     title=title,
                     description=(
-                        f"A practical option in {request.destination}; confirm hours, transit, "
+                        f"A research-informed fallback idea around {attraction} in "
+                        f"{request.destination}; confirm the exact venue, price, hours, transit, "
                         "accessibility, and availability before booking."
                     ),
                     category=interest if position == 0 else "local experience",
                     estimated_cost=activity_costs[position],
-                    source_url=(
-                        source_urls[(index + position) % len(source_urls)]
-                        if source_urls
-                        else None
-                    ),
+                    source_url=None,
                 )
                 for position, title in enumerate(titles)
             ]
@@ -275,7 +295,7 @@ class ItineraryPlannerAgent:
                 ItineraryDay(
                     day=index + 1,
                     date=request.start_date + timedelta(days=index),
-                    theme=f"{interest.title()} and local context",
+                    theme=f"{attraction}: {interest.title()} and local context",
                     activities=activities,
                     daily_notes=[
                         research.local_tips[index % len(research.local_tips)],

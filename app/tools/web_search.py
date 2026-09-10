@@ -60,6 +60,7 @@ class WebSearchTool:
         "each",
     )
     ONE_WAY_KEYWORDS = ("one way", "one-way", "single fare", "single ticket")
+    MAX_FARE_LABEL_DISTANCE = 55
     CABIN_KEYWORDS = {
         "premium_economy": ("premium economy", "premium-economy"),
         "business": ("business class", "business-class"),
@@ -98,6 +99,17 @@ class WebSearchTool:
     )
     DESTINATION_GATEWAYS = {
         "kyoto": {"tokyo", "osaka", "kansai", "kix", "nrt", "hnd"},
+        "bonn": {
+            "frankfurt",
+            "fra",
+            "cologne",
+            "koln",
+            "köln",
+            "cgn",
+            "dusseldorf",
+            "düsseldorf",
+            "dus",
+        },
     }
     MONTHS = {
         "jan": 1,
@@ -690,6 +702,12 @@ class WebSearchTool:
         if match is None:
             return None
         gateway = match.group(1).strip(" .'-")
+        gateway = re.sub(
+            r"\s+(?:cheap|direct|nonstop|non-stop)$",
+            "",
+            gateway,
+            flags=re.IGNORECASE,
+        )
         destination_country = request.destination.rsplit(",", maxsplit=1)[-1].strip()
         destination_city = request.destination.split(",", maxsplit=1)[0].strip().casefold()
         known_gateways = cls.DESTINATION_GATEWAYS.get(destination_city, set())
@@ -791,6 +809,11 @@ class WebSearchTool:
                 quotes.extend(text_quotes)
                 break
         unique = list(dict.fromkeys(quotes))
+        explicit_round_trips = [
+            quote for quote in unique if quote[5] == "explicit_round_trip"
+        ]
+        if explicit_round_trips:
+            unique = explicit_round_trips
         cabin_priority = {
             "economy": 0,
             "unspecified": 1,
@@ -941,6 +964,34 @@ class WebSearchTool:
         start: int,
         end: int,
     ) -> str | None:
+        clause_start = max(
+            (text.rfind(separator, 0, start) for separator in (".", ";", "|", "•", "\n")),
+            default=-1,
+        ) + 1
+        clause_ends = [
+            position
+            for separator in (".", ";", "|", "•", "\n")
+            if (position := text.find(separator, end)) >= 0
+        ]
+        clause_end = min(clause_ends, default=len(text))
+        text = text[clause_start:clause_end]
+        start -= clause_start
+        end -= clause_start
+        following = text[end : min(len(text), end + 45)]
+        following_label = re.match(
+            r"^\s*(?:per\s+(?:person|traveler|traveller|passenger)\s*)?"
+            r"(?:for\s+)?(?:a\s+)?"
+            r"(round[ -]?trip|return fare|one[ -]?way|single fare|single ticket)\b",
+            following,
+            flags=re.IGNORECASE,
+        )
+        if following_label:
+            label = following_label.group(1).casefold()
+            return (
+                "one_way_doubled"
+                if "one" in label or "single" in label
+                else "explicit_round_trip"
+            )
         round_trip_distance = cls._keyword_distance(
             text,
             start,
@@ -959,7 +1010,7 @@ class WebSearchTool:
                 (round_trip_distance, "explicit_round_trip"),
                 (one_way_distance, "one_way_doubled"),
             )
-            if distance is not None and distance <= 120
+            if distance is not None and distance <= cls.MAX_FARE_LABEL_DISTANCE
         ]
         return min(candidates)[1] if candidates else None
 

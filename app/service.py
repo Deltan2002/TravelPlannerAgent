@@ -157,6 +157,21 @@ class TravelPlanService:
             current = self._get_values(plan_id)
             if current["status"] != PlanStatus.AWAITING_REVIEW.value:
                 raise ValueError(f"plan is '{current['status']}', not awaiting_review")
+            allowed_actions = (current.get("awaiting_input") or {}).get(
+                "allowed_actions", []
+            )
+            if allowed_actions and review.action.value not in allowed_actions:
+                raise ValueError(
+                    f"action '{review.action.value}' is not available for this plan; "
+                    f"choose one of: {', '.join(allowed_actions)}"
+                )
+            if review.action == ReviewAction.MODIFY and not (
+                current.get("draft_plan") or current.get("stretch_plan")
+            ):
+                raise ValueError(
+                    "the plan cannot be modified because no itinerary was generated; "
+                    "reject it to repeat research or create a new request"
+                )
             if (
                 review.action != ReviewAction.APPROVE
                 and current.get("revision_count", 0) >= self.settings.max_revisions

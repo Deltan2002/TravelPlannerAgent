@@ -1,8 +1,7 @@
 # AI Travel Planner
 
-A FastAPI and LangGraph travel-planning service with destination research, budget-aware
-itineraries, transport estimates, Redis caching, durable human review, and optional OpenAI
-generation.
+A FastAPI, LangGraph, and React travel planner with destination research, budget-aware
+itineraries, transport estimates, Redis caching, and human review.
 
 The application works without paid credentials in demo mode. Live mode uses Serper,
 Open-Meteo, Frankfurter, and optionally the OpenAI Responses API.
@@ -16,13 +15,15 @@ Open-Meteo, Frankfurter, and optionally the OpenAI Responses API.
 - Generates a weather-aware packing list.
 - Scores each plan with an explainable readiness audit.
 - Pauses in LangGraph for approval, rejection, or modification.
+- Provides a small React workspace for creating, inspecting, and reviewing plans.
 - Saves workflow checkpoints in SQLite and provider results in Redis.
 
 ## Architecture
 
 ~~~mermaid
 flowchart LR
-    API[FastAPI] --> GRAPH[LangGraph]
+    UI[React UI] --> API[FastAPI]
+    API --> GRAPH[LangGraph]
     GRAPH --> VALIDATE[Validate request]
     VALIDATE --> RESEARCH[Research agent]
     RESEARCH --> SEARCH[Search and transport]
@@ -60,6 +61,7 @@ uvicorn app.main:app --reload
 
 Open:
 
+- React UI: <http://127.0.0.1:3000> when using Docker
 - Swagger UI: <http://127.0.0.1:8000/docs>
 - Health check: <http://127.0.0.1:8000/health>
 
@@ -80,7 +82,18 @@ docker compose up --build
 ~~~
 
 Docker Compose starts the API and Redis. The data directory preserves SQLite checkpoints,
-and the redis-data volume preserves cached entries.
+the redis-data volume preserves cached entries, and the React UI is available at
+<http://127.0.0.1:3000>.
+
+For frontend-only development, keep the API on port 8000 and run:
+
+~~~bash
+cd frontend
+npm install
+npm run dev
+~~~
+
+Open <http://127.0.0.1:5173>. Vite forwards `/api` requests to FastAPI.
 
 ## Create a plan
 
@@ -196,7 +209,8 @@ budget_min and budget_max represent the complete trip budget for all travelers, 
 origin transport.
 
 - The within-budget plan targets the midpoint and never exceeds budget_max.
-- The stretch plan is capped at 15% above budget_max and requires explicit approval.
+- The stretch plan is capped at 15% above budget_max, is generated independently with
+  enhanced destination-specific options, and requires explicit approval.
 - Selected transport is deducted before allocating destination spending.
 
 The remaining amount is allocated as:
@@ -291,6 +305,9 @@ the deterministic generator completes the plan.
 | app/models.py | Request, response, and validation models |
 | app/prompts.py | OpenAI prompts |
 | app/cache.py | Redis cache wrapper |
+| frontend/src/App.jsx | React trip form, results, readiness, and review workspace |
+| frontend/src/api.js | Browser API client |
+| frontend/nginx.conf | Production UI hosting and API proxy |
 
 ## Current limitations
 
@@ -312,7 +329,8 @@ the deterministic generator completes the plan.
 5. **Prompt validation:** Sanitize PII, resist prompt injection, and constrain tool use.
 6. **Research quality:** Prioritize official sources and store citation dates.
 7. **Travel providers:** Add live flight, rail, hotel, restaurant, and route APIs.
-8. **User interface:** Replace Swagger as the primary review experience.
+8. **User interface:** Add accounts, saved-plan lists, and richer loading progress to the
+   basic React workspace.
 9. **Monitoring:** Add structured logs, traces, metrics, alerts, and cost tracking.
 10. **Concurrent review:** Add plan versions and database-backed concurrency checks.
 11. **Automated testing:** Add unit, endpoint, workflow, persistence, contract, and load tests.

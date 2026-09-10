@@ -282,7 +282,8 @@ class PlanReadinessTool:
         return cls._check(
             "activity_sources",
             status,
-            f"{sourced} of {len(activities)} planned activities include a research source.",
+            f"{sourced} of {len(activities)} activities include a clickable research citation. "
+            "This measures citation coverage, not activity quality or price accuracy.",
         )
 
     @classmethod

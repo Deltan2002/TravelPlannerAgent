@@ -32,6 +32,7 @@ def build_research_prompt(
 ) -> str:
     context = {
         "travel_request": request.model_dump(mode="json"),
+        "display_date_format": "DD/MM/YYYY in human-readable text",
         "weather": weather.model_dump(mode="json"),
         "web_results": [item.model_dump(mode="json") for item in search_results],
     }
@@ -62,8 +63,28 @@ def build_itinerary_prompt(
             "local_tips": research.local_tips,
             "safety_notes": research.safety_notes,
             "season_notes": research.season_notes,
+            "sources": [
+                {
+                    "title": result.title,
+                    "url": str(result.url),
+                    "snippet": result.snippet,
+                }
+                for result in research.search_results
+                if result.url
+            ],
         },
         "scenario": scenario,
+        "scenario_instructions": (
+            "Create a distinct enhanced itinerary that uses the larger allocation for more "
+            "varied destination-specific experiences, better timing, comfort, or worthwhile "
+            "day trips. Do not copy the within-budget itinerary or fill days with generic "
+            "placeholder activities. Keep individual costs realistic rather than spending the "
+            "full allocation artificially."
+            if scenario == "stretch"
+            else "Create a practical cost-conscious itinerary with destination-specific places, "
+            "realistic timing, and sensible daily travel."
+        ),
+        "display_date_format": "DD/MM/YYYY in human-readable text",
         "amount_over_maximum_budget": over_budget_by,
         "selected_transport": {
             "mode": selected_transport.mode,

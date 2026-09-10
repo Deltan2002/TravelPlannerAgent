@@ -7,5 +7,6 @@ data/*.sqlite3
 data/*.sqlite3-*
 data/recovery-*/
 dist/
+node_modules/
 build/
 *.egg-info/
